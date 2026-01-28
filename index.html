@@ -15,8 +15,9 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
         .fade-in { animation: fadeIn 0.4s ease-out forwards; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .nav-active { color: #2563eb; border-bottom: 2px solid #2563eb; }
         .stat-card { background: white; border-radius: 1.5rem; padding: 1.25rem; border: 1px solid #f1f5f9; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05); }
+        .loading-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
     </style>
 </head>
 <body class="bg-[#f8fafc]">
@@ -25,41 +26,45 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { 
-            getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, signInAnonymously 
+            getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, signInAnonymously 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, collection, getDocs, addDoc, serverTimestamp, onSnapshot, query, where, orderBy, limit
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        try {
-            const firebaseConfig = JSON.parse(__firebase_config);
-            const app = initializeApp(firebaseConfig);
-            const auth = getAuth(app);
-            const db = getFirestore(app);
-            const provider = new GoogleAuthProvider();
-            
-            window.FirebaseSDK = {
-                auth, db, 
-                login: () => signInWithPopup(auth, provider),
-                loginAnon: () => signInAnonymously(auth),
-                logout: () => signOut(auth),
-                onAuthStateChanged, collection, getDocs, addDoc, serverTimestamp, onSnapshot, query, where, orderBy, limit
-            };
-            window.FirebaseReady = true;
-        } catch (e) {
-            console.error("Firebase Init Error:", e);
-        }
+        // Global Bridge for React
+        window.FirebaseBridge = {
+            init: () => {
+                try {
+                    const config = JSON.parse(__firebase_config);
+                    const app = initializeApp(config);
+                    const auth = getAuth(app);
+                    const db = getFirestore(app);
+                    const provider = new GoogleAuthProvider();
+                    
+                    return {
+                        auth, db, provider,
+                        lib: { onAuthStateChanged, collection, getDocs, addDoc, serverTimestamp, onSnapshot, query, where, orderBy, limit, signInWithPopup, signInAnonymously, signOut }
+                    };
+                } catch (e) {
+                    console.error("Firebase Bridge Error:", e);
+                    return null;
+                }
+            }
+        };
+        window.dispatchEvent(new Event('firebase-bridge-ready'));
     </script>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
         const Icon = ({ name, className }) => {
-            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name, className]);
             return <i data-lucide={name} className={className}></i>;
         };
 
         function App() {
+            const [sdk, setSdk] = useState(null);
             const [user, setUser] = useState(null);
             const [view, setView] = useState('lobby'); 
             const [allQuestions, setAllQuestions] = useState([]);
@@ -69,75 +74,85 @@
             const [feedback, setFeedback] = useState(null);
             const [sessionScore, setSessionScore] = useState(0);
             const [loading, setLoading] = useState(true);
-            const [showDebug, setShowDebug] = useState(false);
-            const [appId, setAppId] = useState(localStorage.getItem('ict_app_id') || "default-app-id");
-            const [loadError, setLoadError] = useState(false);
+            const [appId] = useState(typeof __app_id !== 'undefined' ? __app_id : 'default-app-id');
+            const [error, setError] = useState(null);
 
+            // 1. Initialize SDK with retry logic
             useEffect(() => {
-                let attempts = 0;
-                const checkFirebase = setInterval(() => {
-                    attempts++;
-                    if (window.FirebaseReady && window.FirebaseSDK) {
-                        const sdk = window.FirebaseSDK;
-                        sdk.onAuthStateChanged(sdk.auth, (u) => {
-                            setUser(u);
-                            setLoading(false);
-                        });
-                        clearInterval(checkFirebase);
+                const setup = () => {
+                    if (window.FirebaseBridge) {
+                        const instance = window.FirebaseBridge.init();
+                        if (instance) {
+                            setSdk(instance);
+                            instance.lib.onAuthStateChanged(instance.auth, (u) => {
+                                if (!u) {
+                                    // Auto-login anonymously if no user is found to prevent hang
+                                    instance.lib.signInAnonymously(instance.auth).catch(e => setError("Auth failed"));
+                                }
+                                setUser(u);
+                                setLoading(false);
+                            });
+                        } else {
+                            setError("Configuration missing");
+                        }
                     }
-                    if (attempts > 50) { // 5 seconds
-                        setLoadError(true);
-                        clearInterval(checkFirebase);
-                    }
-                }, 100);
-                return () => clearInterval(checkFirebase);
+                };
+
+                if (window.FirebaseBridge) setup();
+                else window.addEventListener('firebase-bridge-ready', setup);
+                
+                const timer = setTimeout(() => {
+                    if (loading) setError("Connection timeout. Please refresh.");
+                }, 8000);
+
+                return () => {
+                    window.removeEventListener('firebase-bridge-ready', setup);
+                    clearTimeout(timer);
+                };
             }, []);
 
+            // 2. Data Subscriptions
             useEffect(() => {
-                if (!user || !window.FirebaseSDK) return;
-                const sdk = window.FirebaseSDK;
+                if (!user || !sdk) return;
+                const { db, lib } = sdk;
 
-                const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
-                const unsubQuestions = sdk.onSnapshot(qRef, (snap) => {
-                    setAllQuestions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                }, (err) => console.error("Firestore Qs Error:", err));
+                const qRef = lib.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+                const unsubQuestions = lib.onSnapshot(qRef, 
+                    (snap) => setAllQuestions(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                    (err) => console.warn("Questions listener:", err)
+                );
 
-                const aRef = sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts');
-                const unsubAttempts = sdk.onSnapshot(aRef, (snap) => {
-                    setAttempts(snap.docs.map(d => d.data()));
-                }, (err) => console.error("Firestore Atts Error:", err));
+                const aRef = lib.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
+                const unsubAttempts = lib.onSnapshot(aRef, 
+                    (snap) => setAttempts(snap.docs.map(d => d.data())),
+                    (err) => console.warn("Attempts listener:", err)
+                );
 
                 return () => { unsubQuestions(); unsubAttempts(); };
-            }, [user, appId]);
+            }, [user, sdk, appId]);
 
             const stats = useMemo(() => {
-                if (attempts.length === 0) return { accuracy5d: 0, bestTags: [], worstTags: [], activeDays: 0 };
-                const now = new Date();
-                const fiveDaysAgo = new Date(now.getTime() - (5 * 24 * 60 * 60 * 1000));
-                const recent = attempts.filter(a => a.timestamp?.toDate() > fiveDaysAgo);
-                const accuracy = recent.length > 0 ? Math.round((recent.filter(a => a.isCorrect).length / recent.length) * 100) : 0;
-                const activeDays = new Set(recent.map(a => a.timestamp?.toDate().toDateString())).size;
+                if (attempts.length === 0) return { accuracy: 0, activeDays: 0, bestTags: [] };
+                const correctCount = attempts.filter(a => a.isCorrect).length;
+                const accuracy = Math.round((correctCount / attempts.length) * 100);
+                const activeDays = new Set(attempts.map(a => {
+                    const d = a.timestamp?.toDate ? a.timestamp.toDate() : new Date();
+                    return d.toDateString();
+                })).size;
                 
-                const tags = {};
+                const tagMap = {};
                 attempts.forEach(a => {
                     const t = a.topic || "General";
-                    if(!tags[t]) tags[t] = { c: 0, n: 0 };
-                    tags[t].n++;
-                    if(a.isCorrect) tags[t].c++;
+                    tagMap[t] = (tagMap[t] || 0) + (a.isCorrect ? 1 : -0.5);
                 });
-                const sorted = Object.entries(tags).map(([k,v]) => ({tag:k, r: v.c/v.n})).sort((a,b) => b.r - a.r);
-                
-                return { 
-                    accuracy5d: accuracy, 
-                    activeDays, 
-                    bestTags: sorted.slice(0, 2).map(x => x.tag),
-                    worstTags: [...sorted].reverse().slice(0, 2).map(x => x.tag)
-                };
+                const bestTags = Object.entries(tagMap).sort((a,b) => b[1] - a[1]).slice(0, 2).map(x => x[0]);
+
+                return { accuracy, activeDays, bestTags };
             }, [attempts]);
 
             const startQuiz = () => {
-                if (allQuestions.length === 0) return alert("No questions available. Please check Teacher Bridge.");
-                const selected = _.sampleSize(allQuestions, Math.min(allQuestions.length, 5));
+                if (allQuestions.length === 0) return alert("Waiting for questions from teacher...");
+                const selected = _.sampleSize(allQuestions, 5);
                 setCurrentQuiz(selected);
                 setCurrentIndex(0);
                 setSessionScore(0);
@@ -145,24 +160,26 @@
             };
 
             const handleAnswer = async (idx) => {
-                if (feedback) return;
+                if (feedback || !sdk || !user) return;
                 const q = currentQuiz[currentIndex];
                 const isCorrect = idx === q.correct_answer;
                 if (isCorrect) setSessionScore(s => s + 1);
                 setFeedback(isCorrect ? 'correct' : 'wrong');
 
-                const sdk = window.FirebaseSDK;
+                const { db, lib } = sdk;
                 const record = {
                     uid: user.uid,
-                    displayName: user.displayName || "Student",
-                    topic: q.topic_tags?.[0] || "General",
+                    displayName: user.displayName || "Anonymous Student",
+                    topic: (Array.isArray(q.topic_tags) ? q.topic_tags[0] : q.topic) || "General",
                     questionId: q.id,
                     isCorrect,
-                    timestamp: sdk.serverTimestamp()
+                    timestamp: lib.serverTimestamp()
                 };
 
-                await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts'), record);
-                await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'activity_feed'), record);
+                try {
+                    await lib.addDoc(lib.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts'), record);
+                    await lib.addDoc(lib.collection(db, 'artifacts', appId, 'public', 'data', 'activity_feed'), record);
+                } catch (e) { console.error("Save error:", e); }
 
                 setTimeout(() => {
                     if (currentIndex + 1 < currentQuiz.length) {
@@ -172,40 +189,24 @@
                         setView('results');
                         setFeedback(null);
                     }
-                }, 800);
+                }, 1000);
             };
 
-            if (loading) return (
-                <div className="h-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
-                    <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Initialising Portal...</p>
-                    {loadError && (
-                        <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-white border rounded-lg text-xs font-bold shadow-sm">
-                            Connection taking too long? Retry
-                        </button>
-                    )}
+            if (error) return (
+                <div className="h-screen flex flex-col items-center justify-center bg-white p-6 text-center">
+                    <Icon name="alert-circle" className="w-12 h-12 text-red-500 mb-4" />
+                    <h2 className="text-xl font-bold text-slate-800">Connection Error</h2>
+                    <p className="text-slate-500 text-sm mt-2 mb-6">{error}</p>
+                    <button onClick={() => window.location.reload()} className="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold">Try Again</button>
                 </div>
             );
 
-            if (!user) return (
-                <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
-                    <div className="max-w-md w-full text-center space-y-8 fade-in">
-                        <div className="w-16 h-16 bg-blue-600 rounded-2xl mx-auto flex items-center justify-center text-white shadow-xl">
-                            <Icon name="cpu" className="w-8 h-8" />
-                        </div>
-                        <div className="space-y-2">
-                            <h1 className="text-3xl font-black text-slate-800 italic tracking-tighter">ICT PORTAL</h1>
-                            <p className="text-slate-500 text-sm font-medium">Please sign in to access your adaptive study path.</p>
-                        </div>
-                        <div className="space-y-3">
-                            <button onClick={() => window.FirebaseSDK.login()} className="w-full bg-white border p-5 rounded-2xl shadow-sm flex items-center justify-center gap-3 font-bold text-slate-700 hover:bg-slate-50 transition-all">
-                                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" /> Sign in with Google
-                            </button>
-                            <button onClick={() => window.FirebaseSDK.loginAnon()} className="w-full p-4 text-xs font-bold text-slate-400 hover:text-slate-600">
-                                Continue as Guest
-                            </button>
-                        </div>
+            if (loading) return (
+                <div className="h-screen flex flex-col items-center justify-center bg-slate-50">
+                    <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center mb-4 loading-pulse shadow-lg shadow-blue-200">
+                        <Icon name="cpu" className="w-6 h-6 text-white" />
                     </div>
+                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Synchronizing Portal</p>
                 </div>
             );
 
@@ -213,85 +214,91 @@
                 <div className="min-h-screen pb-12">
                     <header className="bg-white/80 backdrop-blur-md border-b sticky top-0 z-50 px-6 py-4 flex justify-between items-center">
                         <div className="flex items-center gap-2 font-black italic text-slate-900 tracking-tighter">
-                            <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center text-white">
-                                <Icon name="zap" className="w-4 h-4" />
+                            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
+                                <Icon name="zap" className="w-5 h-5" />
                             </div>
                             DSE ICT
                         </div>
-                        <button onClick={() => setShowDebug(!showDebug)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
-                            <Icon name="user" className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center gap-3">
+                            {user?.isAnonymous === false && (
+                                <button onClick={() => sdk.lib.signOut(sdk.auth)} className="text-[10px] font-bold text-slate-400 hover:text-red-500 transition-colors">EXIT</button>
+                            )}
+                            <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center border text-slate-400">
+                                <Icon name="user" className="w-4 h-4" />
+                            </div>
+                        </div>
                     </header>
 
-                    {showDebug && (
-                        <div className="bg-yellow-50 p-4 border-b flex justify-between items-center">
-                            <code className="text-[10px] text-slate-500 font-mono">UID: {user.uid}</code>
-                            <button onClick={() => window.FirebaseSDK.logout()} className="text-[10px] font-black text-red-500">LOGOUT</button>
-                        </div>
-                    )}
-
-                    <main className="max-w-xl mx-auto p-4 pt-6">
+                    <main className="max-w-xl mx-auto p-4 pt-8">
                         {view === 'lobby' && (
                             <div className="space-y-6 fade-in">
                                 <div>
-                                    <h2 className="text-2xl font-black text-slate-800 tracking-tight">Welcome, {user.displayName || "Student"}</h2>
-                                    <p className="text-xs font-bold text-slate-400">Track your progress and stay consistent.</p>
+                                    <h2 className="text-2xl font-black text-slate-800 tracking-tight">Hi, {user?.displayName || "Student"}</h2>
+                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mt-1">Ready for your daily practice?</p>
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="stat-card">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Weekly Accuracy</p>
-                                        <div className="text-3xl font-black text-blue-600">{stats.accuracy5d}%</div>
+                                        <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Accuracy</p>
+                                        <div className="text-3xl font-black text-blue-600">{stats.accuracy}%</div>
                                     </div>
                                     <div className="stat-card">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Consistency</p>
-                                        <div className="text-3xl font-black text-slate-800">{stats.activeDays}d <span className="text-[10px] opacity-20">/5</span></div>
+                                        <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Active Days</p>
+                                        <div className="text-3xl font-black text-slate-800">{stats.activeDays}</div>
                                     </div>
                                 </div>
 
-                                <div className="stat-card bg-slate-900 text-white border-none">
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <p className="text-[9px] font-black text-blue-400 uppercase mb-2">Mastering</p>
-                                            {stats.bestTags.map(t => <div key={t} className="text-[11px] font-bold opacity-80 mb-1 truncate"># {t}</div>)}
-                                            {stats.bestTags.length === 0 && <div className="text-[10px] opacity-30">Pending data...</div>}
-                                        </div>
-                                        <div>
-                                            <p className="text-[9px] font-black text-red-400 uppercase mb-2">Needs Review</p>
-                                            {stats.worstTags.map(t => <div key={t} className="text-[11px] font-bold opacity-80 mb-1 truncate"># {t}</div>)}
-                                            {stats.worstTags.length === 0 && <div className="text-[10px] opacity-30">Pending data...</div>}
+                                <div className="stat-card bg-slate-900 text-white border-none relative overflow-hidden">
+                                    <div className="relative z-10">
+                                        <p className="text-[9px] font-black text-blue-400 uppercase mb-3">Topic Performance</p>
+                                        <div className="flex flex-wrap gap-2">
+                                            {stats.bestTags.length > 0 ? stats.bestTags.map(t => (
+                                                <span key={t} className="px-3 py-1 bg-white/10 rounded-full text-[10px] font-bold border border-white/10"># {t}</span>
+                                            )) : <span className="text-[10px] opacity-30 italic">Complete a quiz to see insights</span>}
                                         </div>
                                     </div>
+                                    <Icon name="bar-chart-2" className="absolute -right-4 -bottom-4 w-24 h-24 opacity-10" />
                                 </div>
 
-                                <button onClick={startQuiz} className="w-full bg-blue-600 text-white p-8 rounded-[2rem] shadow-xl shadow-blue-100 flex items-center justify-between group active:scale-95 transition-all">
+                                <button onClick={startQuiz} className="w-full bg-blue-600 text-white p-8 rounded-[2.5rem] shadow-2xl shadow-blue-200 flex items-center justify-between group active:scale-95 transition-all">
                                     <div className="text-left">
-                                        <h3 className="text-xl font-black italic">SMART PRACTICE</h3>
-                                        <p className="text-[10px] opacity-70 font-bold uppercase tracking-wider">5 Adaptive Questions</p>
+                                        <h3 className="text-xl font-black italic tracking-tight">SMART PRACTICE</h3>
+                                        <p className="text-[10px] opacity-70 font-bold uppercase tracking-[0.1em] mt-1">5 Adaptive Questions</p>
                                     </div>
-                                    <Icon name="chevron-right" className="w-6 h-6 group-hover:translate-x-1 transition-transform" />
+                                    <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center group-hover:bg-white/30 transition-colors">
+                                        <Icon name="play" className="w-5 h-5 fill-current" />
+                                    </div>
                                 </button>
+
+                                {user?.isAnonymous && (
+                                    <button onClick={() => sdk.lib.signInWithPopup(sdk.auth, sdk.provider)} className="w-full p-4 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center gap-3 text-xs font-bold text-slate-500 hover:bg-white transition-all">
+                                        <Icon name="log-in" className="w-4 h-4" /> Save progress with Google Account
+                                    </button>
+                                )}
                             </div>
                         )}
 
                         {view === 'quiz' && (
                             <div className="space-y-6 fade-in">
-                                <div className="flex justify-between items-center text-[10px] font-black text-slate-400 uppercase">
-                                    <span>Question {currentIndex + 1} of {currentQuiz.length}</span>
-                                    <button onClick={() => setView('lobby')}>Quit</button>
+                                <div className="flex justify-between items-center text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                    <span>Progress {currentIndex + 1} / {currentQuiz.length}</span>
+                                    <button onClick={() => setView('lobby')} className="text-red-400">Abort</button>
                                 </div>
-                                <div className="bg-white p-8 rounded-[2rem] border shadow-sm min-h-[120px] flex items-center justify-center text-center">
-                                    <p className="text-lg font-bold text-slate-800 leading-snug">{currentQuiz[currentIndex].text}</p>
+                                <div className="bg-white p-10 rounded-[2.5rem] border shadow-sm min-h-[160px] flex items-center justify-center text-center">
+                                    <p className="text-xl font-bold text-slate-800 leading-snug tracking-tight">{currentQuiz[currentIndex].text}</p>
                                 </div>
-                                <div className="space-y-3">
+                                <div className="grid gap-3">
                                     {currentQuiz[currentIndex].options.map((opt, i) => (
                                         <button key={i} disabled={!!feedback} onClick={() => handleAnswer(i)}
-                                            className={`w-full p-5 rounded-2xl text-left font-bold border-2 transition-all flex items-center gap-3
-                                            ${!feedback ? 'bg-white border-slate-50 hover:border-blue-400 shadow-sm' : ''}
+                                            className={`w-full p-5 rounded-2xl text-left font-bold border-2 transition-all flex items-center gap-4
+                                            ${!feedback ? 'bg-white border-slate-50 hover:border-blue-400 hover:translate-x-1 shadow-sm' : ''}
                                             ${feedback === 'correct' && i === currentQuiz[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : ''}
                                             ${feedback === 'wrong' && i === currentQuiz[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : ''}
                                             ${feedback === 'wrong' && i !== currentQuiz[currentIndex].correct_answer ? 'opacity-40 grayscale border-slate-50' : ''}`}>
-                                            <span className="w-6 h-6 bg-slate-100 rounded flex items-center justify-center text-[10px]">{String.fromCharCode(65+i)}</span>
+                                            <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black
+                                                ${feedback === 'correct' && i === currentQuiz[currentIndex].correct_answer ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                {String.fromCharCode(65+i)}
+                                            </span>
                                             {opt}
                                         </button>
                                     ))}
@@ -300,10 +307,16 @@
                         )}
 
                         {view === 'results' && (
-                            <div className="text-center py-12 space-y-6 fade-in">
-                                <div className="text-5xl font-black text-blue-600">{sessionScore} / {currentQuiz.length}</div>
-                                <p className="font-bold text-slate-500">Practice complete! Your data has been synced.</p>
-                                <button onClick={() => setView('lobby')} className="w-full bg-slate-900 text-white p-5 rounded-2xl font-black">Return Home</button>
+                            <div className="text-center py-16 space-y-8 fade-in">
+                                <div className="relative inline-block">
+                                    <div className="text-7xl font-black text-blue-600 italic tracking-tighter">{sessionScore} / {currentQuiz.length}</div>
+                                    <Icon name="award" className="absolute -top-6 -right-6 w-12 h-12 text-yellow-400 animate-bounce" />
+                                </div>
+                                <div className="space-y-2">
+                                    <h3 className="text-2xl font-black text-slate-800 tracking-tight">Session Complete!</h3>
+                                    <p className="text-sm font-bold text-slate-400">Great work. Your performance has been synced to your profile.</p>
+                                </div>
+                                <button onClick={() => setView('lobby')} className="w-full bg-slate-900 text-white p-6 rounded-[2rem] font-black text-lg shadow-xl active:scale-95 transition-all">Continue Journey</button>
                             </div>
                         )}
                     </main>
