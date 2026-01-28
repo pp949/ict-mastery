@@ -58,6 +58,7 @@
             where
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
+        // Firebase Config using provided credentials
         const firebaseConfig = {
             apiKey: "AIzaSyDSpaXWx2_qT88ffyTdmH43j63PUyJ82-4",
             authDomain: "ict-learning-platform.firebaseapp.com",
@@ -157,7 +158,6 @@
                     const tags = new Set();
                     if (snap.empty) {
                         setTopics([]);
-                        console.log("No questions found in Firestore for AppID:", appId);
                     } else {
                         snap.forEach(doc => {
                             const data = doc.data();
@@ -200,7 +200,7 @@
                     for (const q of samples) {
                         await sdk.addDoc(qRef, q);
                     }
-                    alert("Sample questions added! Data should update automatically.");
+                    alert("Sample questions added!");
                 } catch (e) {
                     alert("Error seeding: " + e.message);
                 }
@@ -316,9 +316,7 @@
                                     value={appId} 
                                     onChange={(e) => updateAppId(e.target.value)}
                                     className="bg-white border border-yellow-200 p-2 rounded w-full text-blue-600 font-bold"
-                                    placeholder="Enter your specific appId"
                                 />
-                                <p className="text-yellow-600 italic">Changing this will reload data from the new path.</p>
                             </div>
                             <div className="flex gap-2">
                                 <button onClick={seedQuestions} className="bg-yellow-600 text-white px-3 py-1.5 rounded font-bold uppercase tracking-wider">Add Sample Data</button>
@@ -353,7 +351,6 @@
                                         <div className="bg-white p-10 rounded-[1.5rem] border border-dashed border-slate-200 text-center text-slate-400">
                                             <Icon name="search" className="w-8 h-8 mx-auto mb-3 opacity-20" />
                                             <p className="font-bold">No questions found</p>
-                                            <p className="text-[10px] mt-1">Current App ID: <span className="text-blue-500 font-mono">{appId}</span></p>
                                             <button onClick={() => setShowDebug(true)} className="mt-4 text-blue-600 text-[10px] font-black uppercase tracking-widest hover:underline">Adjust App ID Settings</button>
                                         </div>
                                     ) : (
