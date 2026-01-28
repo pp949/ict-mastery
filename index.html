@@ -24,6 +24,7 @@
         <div class="text-center">
             <div class="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
             <p id="loading-text" class="text-slate-600 font-bold tracking-tight">Syncing your progress...</p>
+            <p id="loading-subtext" class="text-slate-400 text-xs mt-2 opacity-0 transition-opacity duration-1000">Connecting to secure session...</p>
         </div>
     </div>
 
@@ -37,7 +38,7 @@
                 <div>
                     <h1 class="text-lg font-black text-slate-900 leading-none">ICT Mastery</h1>
                     <div class="flex items-center gap-2 mt-1">
-                        <span id="auth-status-tag" class="text-[10px] text-blue-500 font-bold uppercase">Connecting...</span>
+                        <span id="auth-status-tag" class="text-[10px] text-blue-500 font-bold uppercase tracking-tighter">Connecting...</span>
                     </div>
                 </div>
             </div>
@@ -81,8 +82,19 @@
                 </div>
 
                 <div class="space-y-4">
-                    <h3 class="text-slate-900 font-black text-xl px-2">Practice Modules</h3>
-                    <div id="topics-list" class="grid gap-3"></div>
+                    <div class="flex items-center justify-between px-2">
+                        <h3 class="text-slate-900 font-black text-xl">Practice Modules</h3>
+                        <button onclick="window.location.reload()" class="text-slate-400 hover:text-blue-600">
+                             <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    <div id="topics-list" class="grid gap-3">
+                        <!-- Content loaded via JS -->
+                         <div class="animate-pulse space-y-3">
+                             <div class="h-20 bg-slate-200 rounded-3xl w-full"></div>
+                             <div class="h-20 bg-slate-200 rounded-3xl w-full"></div>
+                         </div>
+                    </div>
                 </div>
             </div>
 
@@ -152,11 +164,30 @@
         let currentIndex = 0;
         let sessionScore = 0;
         let currentTopic = "";
+        let isAppReady = false;
 
         const overlay = document.getElementById('loading-overlay');
         const appEl = document.getElementById('app');
 
+        // FORCE REVEAL GATEKEEPER
+        // If auth takes more than 4 seconds, show the app regardless. 
+        // Most "stuck" issues are due to getRedirectResult never resolving.
+        const gatekeeper = setTimeout(() => {
+            if (!isAppReady) {
+                console.warn("Gatekeeper triggered: Auth is taking too long. Revealing app in Guest/Current state.");
+                revealApp();
+                if (!currentUser) {
+                    // Force a local guest label if auth is still silent
+                    document.getElementById('auth-status-tag').innerText = 'Offline / Guest';
+                }
+            }
+        }, 4000);
+
         function revealApp() {
+            if (isAppReady) return;
+            isAppReady = true;
+            clearTimeout(gatekeeper);
+            
             overlay.classList.add('opacity-0');
             setTimeout(() => {
                 overlay.style.display = 'none';
@@ -168,36 +199,41 @@
         // Rule 3: Auth Before Queries
         async function startAuth() {
             try {
+                // Show subtext after a brief delay so user knows we are trying
+                setTimeout(() => {
+                    const sub = document.getElementById('loading-subtext');
+                    if (sub) sub.classList.remove('opacity-0');
+                }, 1500);
+
                 await setPersistence(auth, browserLocalPersistence);
                 
-                // Handle Redirect Result FIRST
-                const redirectResult = await getRedirectResult(auth).catch(() => null);
+                // We don't await getRedirectResult indefinitely; we race it or catch errors
+                getRedirectResult(auth).catch(e => console.warn("Redirect result failed:", e));
                 
-                // Perform sign-in if no user exists
-                if (!auth.currentUser) {
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        await signInWithCustomToken(auth, __initial_auth_token).catch(() => signInAnonymously(auth));
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                }
-
-                // Listener for subsequent state changes
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
                         currentUser = user;
                         setupApp(user);
+                    } else {
+                        // If no user, trigger anonymous sign in
+                        signInAnonymously(auth).catch(e => {
+                            console.error("Anon sign in failed:", e);
+                            revealApp();
+                        });
                     }
                 });
 
             } catch (err) {
-                console.error("Auth error:", err);
+                console.error("Auth initialization error:", err);
                 revealApp();
             }
         }
 
         function setupApp(user) {
-            document.getElementById('auth-status-tag').innerText = user.isAnonymous ? 'Guest Mode' : (user.displayName || 'Linked Account');
+            const statusTag = document.getElementById('auth-status-tag');
+            if (statusTag) {
+                statusTag.innerText = user.isAnonymous ? 'Guest Mode' : (user.displayName || 'Linked Account');
+            }
             
             if (user.isAnonymous) {
                 document.getElementById('login-banner').classList.remove('hidden');
@@ -207,9 +243,11 @@
                 document.getElementById('btn-signout').classList.remove('hidden');
             }
             
-            // Only fetch data once we have a user (Rule 3)
+            // Start listeners
             listenForData(user);
-            revealApp();
+            
+            // Brief delay to ensure Firestore handshake completes before showing UI
+            setTimeout(revealApp, 200);
         }
 
         function listenForData(user) {
@@ -226,7 +264,10 @@
                     else tags.add(t);
                 });
                 renderTopics(Array.from(tags).sort());
-            }, (err) => console.error("Questions Permission Error:", err));
+            }, (err) => {
+                console.error("Questions Permission Error:", err);
+                renderTopics([]); // Clear loading state
+            });
 
             // Private Data: User Attempts (Rule 1)
             const statsPath = collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
@@ -243,11 +284,15 @@
         function renderTopics(topics) {
             const list = document.getElementById('topics-list');
             if (topics.length === 0) {
-                list.innerHTML = `<p class="text-center py-10 text-slate-400">No questions found for this App ID.</p>`;
+                list.innerHTML = `
+                    <div class="bg-white p-8 rounded-3xl border border-dashed border-slate-300 text-center">
+                        <p class="text-slate-400 font-bold">No modules found.</p>
+                        <p class="text-slate-400 text-xs">Verify your App ID or wait for teacher sync.</p>
+                    </div>`;
                 return;
             }
             list.innerHTML = topics.map(topic => `
-                <button onclick="window.startQuiz('${topic}')" class="w-full bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:border-blue-500 transition-all flex justify-between items-center text-left">
+                <button onclick="window.startQuiz('${topic}')" class="w-full bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:border-blue-500 active:scale-[0.98] transition-all flex justify-between items-center text-left">
                     <span class="font-black text-slate-800 text-lg">${topic}</span>
                     <i data-lucide="chevron-right" class="w-5 h-5 text-slate-300"></i>
                 </button>
@@ -258,20 +303,22 @@
         window.startQuiz = async (topic) => {
             if (!currentUser) return;
             currentTopic = topic;
-            overlay.style.display = 'flex';
-            overlay.classList.remove('opacity-0');
-            document.getElementById('loading-text').innerText = "Loading Module...";
+            
+            // Show micro-loader
+            document.getElementById('topics-list').innerHTML = `<div class="py-10 text-center animate-pulse font-bold text-blue-600">Preparing Module...</div>`;
             
             const qPath = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
             const snap = await getDocs(qPath);
             currentQuestions = snap.docs
                 .map(d => ({ id: d.id, ...d.data() }))
-                .filter(q => (Array.isArray(q.topic) ? q.topic.includes(topic) : q.topic === topic));
+                .filter(q => {
+                    const t = q.topic || q.topic_tags || "General";
+                    return Array.isArray(t) ? t.includes(topic) : t === topic;
+                });
             
             currentIndex = 0; sessionScore = 0;
             showView('quiz');
             renderQuestion();
-            revealApp();
         };
 
         function renderQuestion() {
@@ -280,6 +327,7 @@
             document.getElementById('quiz-question-text').innerText = q.text;
             document.getElementById('quiz-options').innerHTML = q.options.map((opt, i) => `
                 <button onclick="window.handleAnswer(${i})" class="w-full p-5 rounded-2xl border-2 border-slate-100 bg-white font-bold hover:border-blue-500 text-left transition-all">
+                    <span class="inline-block w-8 h-8 bg-slate-100 rounded-lg text-center leading-8 mr-3 text-sm text-slate-400 font-black">${String.fromCharCode(65+i)}</span>
                     ${opt}
                 </button>
             `).join('');
@@ -291,15 +339,22 @@
             const isCorrect = idx === q.correct_answer;
             if (isCorrect) sessionScore++;
 
+            // Visual feedback
+            const btn = document.querySelectorAll('#quiz-options button')[idx];
+            btn.classList.add(isCorrect ? 'border-green-500' : 'border-red-500');
+            btn.classList.add(isCorrect ? 'bg-green-50' : 'bg-red-50');
+
             await addDoc(collection(db, 'artifacts', appId, 'users', currentUser.uid, 'attempts'), {
                 topic: currentTopic, isCorrect, timestamp: serverTimestamp()
-            }).catch(console.error);
+            }).catch(e => console.error("Save error:", e));
 
-            if (currentIndex + 1 < currentQuestions.length) {
-                currentIndex++; renderQuestion();
-            } else {
-                showResults();
-            }
+            setTimeout(() => {
+                if (currentIndex + 1 < currentQuestions.length) {
+                    currentIndex++; renderQuestion();
+                } else {
+                    showResults();
+                }
+            }, 800);
         };
 
         function showResults() {
@@ -309,8 +364,12 @@
 
         window.showLobby = () => showView('lobby');
         function showView(v) {
-            ['lobby', 'quiz', 'results'].forEach(id => document.getElementById(`view-${id}`).classList.add('hidden'));
-            document.getElementById(`view-${v}`).classList.remove('hidden');
+            ['lobby', 'quiz', 'results'].forEach(id => {
+                const el = document.getElementById(`view-${id}`);
+                if (el) el.classList.add('hidden');
+            });
+            const target = document.getElementById(`view-${v}`);
+            if (target) target.classList.remove('hidden');
             lucide.createIcons();
         }
 
@@ -322,7 +381,11 @@
             signOut(auth).then(() => window.location.reload());
         };
 
+        document.getElementById('btn-quit-quiz').onclick = () => showView('lobby');
+
+        // Kick off the process
         startAuth();
+
     </script>
 </body>
 </html>
