@@ -74,15 +74,26 @@
         const provider = new GoogleAuthProvider();
         provider.setCustomParameters({ prompt: 'select_account' });
 
+        // Ensure persistence is set to handle session loss
         setPersistence(auth, browserLocalPersistence).catch(err => console.error("Persistence Error:", err));
 
         window.FirebaseSDK = {
             auth,
             db,
             login: async () => {
+                // Check if we are in a potentially restricted environment (iFrame or specific mobile browsers)
                 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-                if (isMobile) return signInWithRedirect(auth, provider);
-                return signInWithPopup(auth, provider);
+                try {
+                    // Default to Popup for better reliability in iFrames/Partitioned storage
+                    // Redirect is often blocked or fails state checks in cross-origin environments
+                    return await signInWithPopup(auth, provider);
+                } catch (error) {
+                    console.warn("Popup blocked or failed, attempting redirect fallback:", error);
+                    if (error.code === 'auth/popup-blocked' || error.code === 'auth/cancelled-popup-request') {
+                        return signInWithRedirect(auth, provider);
+                    }
+                    throw error;
+                }
             },
             getRedirectResult: () => getRedirectResult(auth),
             logout: () => signOut(auth),
@@ -120,6 +131,7 @@
             const [loading, setLoading] = useState(true);
             const [sdkReady, setSdkReady] = useState(false);
             const [showDebug, setShowDebug] = useState(false);
+            const [authError, setAuthError] = useState(null);
             
             // Allow dynamic AppID switching for testing
             const [appId, setAppId] = useState(localStorage.getItem('ict_app_id') || "default-app-id");
@@ -139,7 +151,19 @@
             useEffect(() => {
                 if (!sdkReady) return;
                 const sdk = window.FirebaseSDK;
-                sdk.getRedirectResult().catch(() => {});
+                
+                // Handle the result of a redirect login if it happened
+                sdk.getRedirectResult()
+                    .then((result) => {
+                        if (result?.user) setUser(result.user);
+                    })
+                    .catch((error) => {
+                        console.error("Auth Redirect Error:", error);
+                        if (error.code === 'auth/auth-domain-config-required' || error.code === 'auth/operation-not-supported-in-this-environment') {
+                            setAuthError("This browser environment restricts login redirects. Please try again or use a different browser.");
+                        }
+                    });
+
                 const unsubAuth = sdk.onAuthStateChanged(sdk.auth, (u) => {
                     authChecked.current = true;
                     setUser(u);
@@ -203,6 +227,15 @@
                     alert("Sample questions added!");
                 } catch (e) {
                     alert("Error seeding: " + e.message);
+                }
+            };
+
+            const handleLogin = async () => {
+                setAuthError(null);
+                try {
+                    await window.FirebaseSDK.login();
+                } catch (err) {
+                    setAuthError(err.message);
                 }
             };
 
@@ -276,10 +309,21 @@
                             <Icon name="shield-check" className="w-10 h-10" />
                         </div>
                         <h1 className="text-3xl font-black text-slate-800 italic">ICT MASTERY</h1>
-                        <button onClick={() => window.FirebaseSDK.login()} className="google-btn w-full py-4 px-6 rounded-2xl flex items-center justify-center gap-3 font-bold shadow-sm">
+                        
+                        {authError && (
+                            <div className="bg-red-50 border border-red-100 p-4 rounded-xl text-red-600 text-sm font-semibold">
+                                {authError}
+                            </div>
+                        )}
+
+                        <button onClick={handleLogin} className="google-btn w-full py-4 px-6 rounded-2xl flex items-center justify-center gap-3 font-bold shadow-sm">
                             <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" />
                             Student Login
                         </button>
+                        
+                        <p className="text-slate-400 text-xs px-4">
+                            If login fails, ensure third-party cookies are enabled or try opening the portal in a new tab.
+                        </p>
                     </div>
                 </div>
             );
