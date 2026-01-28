@@ -4,14 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DSE ICT Mastery | Student Portal</title>
-    <!-- Dependencies -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- Lodash for sampling -->
     <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
@@ -28,27 +25,30 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { 
-            getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence 
+            getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, signInAnonymously 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, collection, getDocs, addDoc, serverTimestamp, onSnapshot, query, where, orderBy, limit
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Firebase configuration provided by environment
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const provider = new GoogleAuthProvider();
-        provider.setCustomParameters({ prompt: 'select_account' });
-
-        setPersistence(auth, browserLocalPersistence).catch(err => console.error(err));
-
-        window.FirebaseSDK = {
-            auth, db, login: () => signInWithPopup(auth, provider),
-            logout: () => signOut(auth),
-            onAuthStateChanged, collection, getDocs, addDoc, serverTimestamp, onSnapshot, query, where, orderBy, limit
-        };
+        try {
+            const firebaseConfig = JSON.parse(__firebase_config);
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            const db = getFirestore(app);
+            const provider = new GoogleAuthProvider();
+            
+            window.FirebaseSDK = {
+                auth, db, 
+                login: () => signInWithPopup(auth, provider),
+                loginAnon: () => signInAnonymously(auth),
+                logout: () => signOut(auth),
+                onAuthStateChanged, collection, getDocs, addDoc, serverTimestamp, onSnapshot, query, where, orderBy, limit
+            };
+            window.FirebaseReady = true;
+        } catch (e) {
+            console.error("Firebase Init Error:", e);
+        }
     </script>
 
     <script type="text/babel">
@@ -57,64 +57,6 @@
         const Icon = ({ name, className }) => {
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} className={className}></i>;
-        };
-
-        const LeaderboardView = ({ appId, currentUserId }) => {
-            const [data, setData] = useState([]);
-            const [loading, setLoading] = useState(true);
-
-            useEffect(() => {
-                const sdk = window.FirebaseSDK;
-                const feedRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'activity_feed');
-                
-                const unsubscribe = sdk.onSnapshot(feedRef, (snap) => {
-                    const scores = {};
-                    snap.forEach(doc => {
-                        const d = doc.data();
-                        if (!scores[d.uid]) scores[d.uid] = { name: d.displayName, correct: 0, total: 0 };
-                        scores[d.uid].total++;
-                        if (d.isCorrect) scores[d.uid].correct++;
-                    });
-                    const sorted = Object.entries(scores)
-                        .map(([uid, stats]) => ({ uid, ...stats }))
-                        .sort((a, b) => b.correct - a.correct)
-                        .slice(0, 10);
-                    setData(sorted);
-                    setLoading(false);
-                }, (error) => {
-                    console.error("Firestore error:", error);
-                    setLoading(false);
-                });
-                return () => unsubscribe();
-            }, [appId]);
-
-            if (loading) return <div className="p-10 text-center animate-pulse text-slate-400 font-bold uppercase text-xs">Loading Rankings...</div>;
-
-            return (
-                <div className="space-y-4 fade-in">
-                    <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden">
-                        <div className="bg-slate-900 p-6 text-white flex justify-between items-center">
-                            <h2 className="text-xl font-black italic tracking-tight">GLOBAL RANKING</h2>
-                            <Icon name="trophy" className="w-5 h-5 text-yellow-400" />
-                        </div>
-                        <div className="divide-y divide-slate-50">
-                            {data.length === 0 ? (
-                                <div className="p-10 text-center text-slate-400 italic">No rankings available yet.</div>
-                            ) : data.map((entry, i) => (
-                                <div key={entry.uid} className={`p-5 flex items-center justify-between transition-colors ${entry.uid === currentUserId ? 'bg-blue-50/50' : 'hover:bg-slate-50'}`}>
-                                    <div className="flex items-center gap-4">
-                                        <span className={`w-8 font-black text-lg ${i < 3 ? 'text-blue-600' : 'text-slate-300'}`}>{i + 1}</span>
-                                        <span className={`font-bold ${entry.uid === currentUserId ? 'text-blue-700' : 'text-slate-700'}`}>
-                                            {entry.name} {entry.uid === currentUserId && " (You)"}
-                                        </span>
-                                    </div>
-                                    <div className="font-black text-blue-600 bg-blue-100 px-3 py-1 rounded-lg text-sm">{entry.correct} pts</div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            );
         };
 
         function App() {
@@ -127,293 +69,230 @@
             const [feedback, setFeedback] = useState(null);
             const [sessionScore, setSessionScore] = useState(0);
             const [loading, setLoading] = useState(true);
-            const [sdkReady, setSdkReady] = useState(false);
             const [showDebug, setShowDebug] = useState(false);
             const [appId, setAppId] = useState(localStorage.getItem('ict_app_id') || "default-app-id");
+            const [loadError, setLoadError] = useState(false);
 
             useEffect(() => {
-                const check = setInterval(() => { if (window.FirebaseSDK) { setSdkReady(true); clearInterval(check); } }, 100);
-                return () => clearInterval(check);
+                let attempts = 0;
+                const checkFirebase = setInterval(() => {
+                    attempts++;
+                    if (window.FirebaseReady && window.FirebaseSDK) {
+                        const sdk = window.FirebaseSDK;
+                        sdk.onAuthStateChanged(sdk.auth, (u) => {
+                            setUser(u);
+                            setLoading(false);
+                        });
+                        clearInterval(checkFirebase);
+                    }
+                    if (attempts > 50) { // 5 seconds
+                        setLoadError(true);
+                        clearInterval(checkFirebase);
+                    }
+                }, 100);
+                return () => clearInterval(checkFirebase);
             }, []);
 
             useEffect(() => {
-                if (!sdkReady) return;
-                const sdk = window.FirebaseSDK;
-                const unsub = sdk.onAuthStateChanged(sdk.auth, (u) => { 
-                    setUser(u); 
-                    setLoading(false); 
-                });
-                return () => unsub();
-            }, [sdkReady]);
-
-            // Sync Data
-            useEffect(() => {
-                if (!user || !sdkReady) return;
+                if (!user || !window.FirebaseSDK) return;
                 const sdk = window.FirebaseSDK;
 
-                const unsubQuestions = sdk.onSnapshot(sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions'), (snap) => {
+                const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
+                const unsubQuestions = sdk.onSnapshot(qRef, (snap) => {
                     setAllQuestions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                }, (err) => console.error("Questions fetch error:", err));
+                }, (err) => console.error("Firestore Qs Error:", err));
 
-                const unsubAttempts = sdk.onSnapshot(sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts'), (snap) => {
+                const aRef = sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts');
+                const unsubAttempts = sdk.onSnapshot(aRef, (snap) => {
                     setAttempts(snap.docs.map(d => d.data()));
-                }, (err) => console.error("Attempts fetch error:", err));
+                }, (err) => console.error("Firestore Atts Error:", err));
 
                 return () => { unsubQuestions(); unsubAttempts(); };
-            }, [user, sdkReady, appId]);
+            }, [user, appId]);
 
-            // Analytics Logic
             const stats = useMemo(() => {
                 if (attempts.length === 0) return { accuracy5d: 0, bestTags: [], worstTags: [], activeDays: 0 };
-                
                 const now = new Date();
                 const fiveDaysAgo = new Date(now.getTime() - (5 * 24 * 60 * 60 * 1000));
+                const recent = attempts.filter(a => a.timestamp?.toDate() > fiveDaysAgo);
+                const accuracy = recent.length > 0 ? Math.round((recent.filter(a => a.isCorrect).length / recent.length) * 100) : 0;
+                const activeDays = new Set(recent.map(a => a.timestamp?.toDate().toDateString())).size;
                 
-                const recentAttempts = attempts.filter(a => a.timestamp?.toDate() > fiveDaysAgo);
-                const accuracy5d = recentAttempts.length > 0 
-                    ? Math.round((recentAttempts.filter(a => a.isCorrect).length / recentAttempts.length) * 100)
-                    : 0;
-
-                const activeDaysSet = new Set(recentAttempts.map(a => a.timestamp?.toDate().toDateString()));
-                
-                const tagStats = {};
+                const tags = {};
                 attempts.forEach(a => {
-                    const topic = a.topic || "General";
-                    if (!tagStats[topic]) tagStats[topic] = { correct: 0, total: 0 };
-                    tagStats[topic].total++;
-                    if (a.isCorrect) tagStats[topic].correct++;
+                    const t = a.topic || "General";
+                    if(!tags[t]) tags[t] = { c: 0, n: 0 };
+                    tags[t].n++;
+                    if(a.isCorrect) tags[t].c++;
                 });
-
-                const sortedTags = Object.entries(tagStats)
-                    .map(([tag, s]) => ({ tag, rate: s.correct / s.total }))
-                    .sort((a, b) => b.rate - a.rate);
-
-                return {
-                    accuracy5d,
-                    bestTags: sortedTags.slice(0, 3).map(t => t.tag),
-                    worstTags: [...sortedTags].reverse().slice(0, 3).map(t => t.tag),
-                    activeDays: activeDaysSet.size
+                const sorted = Object.entries(tags).map(([k,v]) => ({tag:k, r: v.c/v.n})).sort((a,b) => b.r - a.r);
+                
+                return { 
+                    accuracy5d: accuracy, 
+                    activeDays, 
+                    bestTags: sorted.slice(0, 2).map(x => x.tag),
+                    worstTags: [...sorted].reverse().slice(0, 2).map(x => x.tag)
                 };
             }, [attempts]);
 
-            const generateSmartPractice = () => {
-                if (allQuestions.length < 5) { 
-                    alert(`Not enough questions in database (Found ${allQuestions.length}, need 5). Please add more via the Teacher Bridge.`); 
-                    return; 
-                }
-                
-                // Grouping performance by tag
-                const tagPerformance = {};
-                attempts.forEach(a => {
-                    const topic = a.topic || "General";
-                    if(!tagPerformance[topic]) tagPerformance[topic] = { correct: 0, total: 0 };
-                    tagPerformance[topic].total++;
-                    if(a.isCorrect) tagPerformance[topic].correct++;
-                });
-
-                const sortedTopics = Object.entries(tagPerformance)
-                    .map(([tag, s]) => ({ tag, rate: s.correct / s.total }))
-                    .sort((a, b) => a.rate - b.rate);
-
-                const worstTopic = sortedTopics[0]?.tag;
-                const avgTopic = sortedTopics[Math.floor(sortedTopics.length / 2)]?.tag;
-
-                // Selection Logic
-                // 1. Worst topics (2)
-                const poolWorst = allQuestions.filter(q => (q.topic_tags || []).includes(worstTopic));
-                // 2. Average topics (2)
-                const poolAvg = allQuestions.filter(q => (q.topic_tags || []).includes(avgTopic));
-                // 3. Dormant (1) - Not attempted or long time ago
-                const attemptedIds = new Set(attempts.map(a => a.questionId));
-                const poolDormant = allQuestions.filter(q => !attemptedIds.has(q.id));
-
-                const finalSelection = [
-                    ..._.sampleSize(poolWorst.length > 0 ? poolWorst : allQuestions, 2),
-                    ..._.sampleSize(poolAvg.length > 0 ? poolAvg : allQuestions, 2),
-                    ..._.sampleSize(poolDormant.length > 0 ? poolDormant : allQuestions, 1)
-                ].slice(0, 5);
-
-                setCurrentQuiz(finalSelection);
+            const startQuiz = () => {
+                if (allQuestions.length === 0) return alert("No questions available. Please check Teacher Bridge.");
+                const selected = _.sampleSize(allQuestions, Math.min(allQuestions.length, 5));
+                setCurrentQuiz(selected);
                 setCurrentIndex(0);
                 setSessionScore(0);
                 setView('quiz');
             };
 
-            const handleAnswer = async (index) => {
-                if (feedback || !user) return;
-                const sdk = window.FirebaseSDK;
+            const handleAnswer = async (idx) => {
+                if (feedback) return;
                 const q = currentQuiz[currentIndex];
-                const isCorrect = index === q.correct_answer;
+                const isCorrect = idx === q.correct_answer;
                 if (isCorrect) setSessionScore(s => s + 1);
                 setFeedback(isCorrect ? 'correct' : 'wrong');
 
+                const sdk = window.FirebaseSDK;
                 const record = {
-                    uid: user.uid, 
-                    displayName: user.displayName || "Anonymous Student",
-                    topic: q.topic_tags?.[0] || "General", 
+                    uid: user.uid,
+                    displayName: user.displayName || "Student",
+                    topic: q.topic_tags?.[0] || "General",
                     questionId: q.id,
-                    isCorrect, 
+                    isCorrect,
                     timestamp: sdk.serverTimestamp()
                 };
-                
-                // Save to private attempts and public feed
+
                 await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts'), record);
                 await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'activity_feed'), record);
 
                 setTimeout(() => {
-                    if (currentIndex + 1 < currentQuiz.length) { 
-                        setCurrentIndex(i => i + 1); 
-                        setFeedback(null); 
-                    } else { 
-                        setView('results'); 
-                        setFeedback(null); 
+                    if (currentIndex + 1 < currentQuiz.length) {
+                        setCurrentIndex(i => i + 1);
+                        setFeedback(null);
+                    } else {
+                        setView('results');
+                        setFeedback(null);
                     }
-                }, 1000);
+                }, 800);
             };
 
-            if (loading || !sdkReady) return (
-                <div className="h-screen flex items-center justify-center bg-slate-50 font-black text-slate-300 text-xs tracking-tighter uppercase">
-                    Loading Data...
+            if (loading) return (
+                <div className="h-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
+                    <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                    <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Initialising Portal...</p>
+                    {loadError && (
+                        <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-white border rounded-lg text-xs font-bold shadow-sm">
+                            Connection taking too long? Retry
+                        </button>
+                    )}
                 </div>
             );
 
             if (!user) return (
-                <div className="min-h-screen flex items-center justify-center p-6 bg-[#f8fafc]">
+                <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
                     <div className="max-w-md w-full text-center space-y-8 fade-in">
-                        <div className="w-20 h-20 bg-blue-600 rounded-3xl mx-auto flex items-center justify-center text-white shadow-2xl">
-                            <Icon name="shield-check" className="w-10 h-10" />
+                        <div className="w-16 h-16 bg-blue-600 rounded-2xl mx-auto flex items-center justify-center text-white shadow-xl">
+                            <Icon name="cpu" className="w-8 h-8" />
                         </div>
-                        <h1 className="text-3xl font-black text-slate-800 italic tracking-tighter">ICT MASTERY</h1>
-                        <button onClick={() => window.FirebaseSDK.login()} 
-                            className="w-full bg-white border border-slate-100 p-6 rounded-[2rem] shadow-xl flex items-center justify-center gap-4 font-black text-slate-700 hover:scale-[1.02] active:scale-95 transition-all">
-                            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" /> SIGN IN WITH GOOGLE
-                        </button>
+                        <div className="space-y-2">
+                            <h1 className="text-3xl font-black text-slate-800 italic tracking-tighter">ICT PORTAL</h1>
+                            <p className="text-slate-500 text-sm font-medium">Please sign in to access your adaptive study path.</p>
+                        </div>
+                        <div className="space-y-3">
+                            <button onClick={() => window.FirebaseSDK.login()} className="w-full bg-white border p-5 rounded-2xl shadow-sm flex items-center justify-center gap-3 font-bold text-slate-700 hover:bg-slate-50 transition-all">
+                                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" /> Sign in with Google
+                            </button>
+                            <button onClick={() => window.FirebaseSDK.loginAnon()} className="w-full p-4 text-xs font-bold text-slate-400 hover:text-slate-600">
+                                Continue as Guest
+                            </button>
+                        </div>
                     </div>
                 </div>
             );
 
             return (
-                <div className="min-h-screen pb-24">
+                <div className="min-h-screen pb-12">
                     <header className="bg-white/80 backdrop-blur-md border-b sticky top-0 z-50 px-6 py-4 flex justify-between items-center">
-                        <div className="flex items-center gap-2 font-black italic text-slate-900 tracking-tighter cursor-pointer" onClick={() => setView('lobby')}>
-                            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
-                                <Icon name="cpu" className="w-4 h-4" />
+                        <div className="flex items-center gap-2 font-black italic text-slate-900 tracking-tighter">
+                            <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center text-white">
+                                <Icon name="zap" className="w-4 h-4" />
                             </div>
                             DSE ICT
                         </div>
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => setShowDebug(!showDebug)} className="p-2 text-slate-300 transition-colors hover:text-slate-600">
-                                <Icon name="settings" className="w-4 h-4" />
-                            </button>
-                            <div className="bg-slate-900 text-white px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-tight">
-                                {user.displayName?.split(' ')[0] || "User"}
-                            </div>
-                        </div>
+                        <button onClick={() => setShowDebug(!showDebug)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+                            <Icon name="user" className="w-4 h-4" />
+                        </button>
                     </header>
 
                     {showDebug && (
-                        <div className="bg-yellow-50 p-4 border-b fade-in">
-                            <label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Environment ID</label>
-                            <input 
-                                value={appId} 
-                                onChange={e => {setAppId(e.target.value); localStorage.setItem('ict_app_id', e.target.value)}} 
-                                className="w-full text-xs font-mono p-3 border rounded-xl bg-white shadow-inner" 
-                            />
+                        <div className="bg-yellow-50 p-4 border-b flex justify-between items-center">
+                            <code className="text-[10px] text-slate-500 font-mono">UID: {user.uid}</code>
+                            <button onClick={() => window.FirebaseSDK.logout()} className="text-[10px] font-black text-red-500">LOGOUT</button>
                         </div>
                     )}
 
-                    <main className="max-w-xl mx-auto p-4 pt-8">
-                        {(view === 'lobby' || view === 'leaderboard') && (
-                            <div className="flex gap-6 border-b mb-8 font-black text-xs uppercase tracking-widest text-slate-400">
-                                <button onClick={() => setView('lobby')} className={`pb-2 px-1 transition-all ${view === 'lobby' ? 'nav-active' : ''}`}>Dashboard</button>
-                                <button onClick={() => setView('leaderboard')} className={`pb-2 px-1 transition-all ${view === 'leaderboard' ? 'nav-active' : ''}`}>Ranking</button>
-                            </div>
-                        )}
-
+                    <main className="max-w-xl mx-auto p-4 pt-6">
                         {view === 'lobby' && (
                             <div className="space-y-6 fade-in">
-                                <div className="px-2">
-                                    <h1 className="text-2xl font-black text-slate-800">Welcome back, <span className="text-blue-600">{user.displayName?.split(' ')[0]}</span></h1>
-                                    <p className="text-xs font-bold text-slate-400 mt-1">Here is your adaptive study summary.</p>
+                                <div>
+                                    <h2 className="text-2xl font-black text-slate-800 tracking-tight">Welcome, {user.displayName || "Student"}</h2>
+                                    <p className="text-xs font-bold text-slate-400">Track your progress and stay consistent.</p>
                                 </div>
 
-                                {/* Performance Stats Grid */}
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="stat-card">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase mb-1">5-Day Accuracy</p>
-                                        <div className="text-3xl font-black text-blue-600 tracking-tighter">{stats.accuracy5d}%</div>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Weekly Accuracy</p>
+                                        <div className="text-3xl font-black text-blue-600">{stats.accuracy5d}%</div>
                                     </div>
                                     <div className="stat-card">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Participation</p>
-                                        <div className="text-3xl font-black text-slate-800 tracking-tighter">{stats.activeDays}/5 <span className="text-xs text-slate-300 font-bold">days</span></div>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Consistency</p>
+                                        <div className="text-3xl font-black text-slate-800">{stats.activeDays}d <span className="text-[10px] opacity-20">/5</span></div>
                                     </div>
                                 </div>
 
-                                <div className="stat-card bg-slate-900 text-white border-0 shadow-2xl">
-                                    <div className="grid grid-cols-2 gap-6">
+                                <div className="stat-card bg-slate-900 text-white border-none">
+                                    <div className="grid grid-cols-2 gap-4">
                                         <div>
-                                            <p className="text-[10px] font-bold text-slate-500 uppercase mb-3 tracking-widest flex items-center gap-1">
-                                                <Icon name="trending-up" className="w-3 h-3 text-green-400" /> 3 Best Topics
-                                            </p>
-                                            <div className="space-y-2">
-                                                {stats.bestTags.length > 0 ? stats.bestTags.map(t => (
-                                                    <div key={t} className="text-xs font-bold truncate bg-white/5 p-2 rounded-lg">{t}</div>
-                                                )) : <div className="text-[10px] opacity-40">Complete quizzes to unlock</div>}
-                                            </div>
+                                            <p className="text-[9px] font-black text-blue-400 uppercase mb-2">Mastering</p>
+                                            {stats.bestTags.map(t => <div key={t} className="text-[11px] font-bold opacity-80 mb-1 truncate"># {t}</div>)}
+                                            {stats.bestTags.length === 0 && <div className="text-[10px] opacity-30">Pending data...</div>}
                                         </div>
                                         <div>
-                                            <p className="text-[10px] font-bold text-slate-500 uppercase mb-3 tracking-widest flex items-center gap-1">
-                                                <Icon name="trending-down" className="w-3 h-3 text-red-400" /> 3 Worst Topics
-                                            </p>
-                                            <div className="space-y-2">
-                                                {stats.worstTags.length > 0 ? stats.worstTags.map(t => (
-                                                    <div key={t} className="text-xs font-bold truncate bg-white/5 p-2 rounded-lg">{t}</div>
-                                                )) : <div className="text-[10px] opacity-40">Complete quizzes to unlock</div>}
-                                            </div>
+                                            <p className="text-[9px] font-black text-red-400 uppercase mb-2">Needs Review</p>
+                                            {stats.worstTags.map(t => <div key={t} className="text-[11px] font-bold opacity-80 mb-1 truncate"># {t}</div>)}
+                                            {stats.worstTags.length === 0 && <div className="text-[10px] opacity-30">Pending data...</div>}
                                         </div>
                                     </div>
                                 </div>
 
-                                <button onClick={generateSmartPractice} className="w-full bg-blue-600 hover:bg-blue-700 text-white p-8 rounded-[2.5rem] shadow-2xl shadow-blue-200 transition-all active:scale-95 group overflow-hidden relative">
-                                    <div className="relative z-10 flex items-center justify-between">
-                                        <div className="text-left">
-                                            <h3 className="text-2xl font-black italic tracking-tight">SMART PRACTICE</h3>
-                                            <p className="text-[10px] font-bold text-blue-100 uppercase tracking-widest mt-1 opacity-80">5 Adaptive Questions based on data</p>
-                                        </div>
-                                        <div className="w-14 h-14 bg-white/10 rounded-2xl flex items-center justify-center transition-transform group-hover:rotate-12">
-                                            <Icon name="zap" className="w-8 h-8 text-white" />
-                                        </div>
+                                <button onClick={startQuiz} className="w-full bg-blue-600 text-white p-8 rounded-[2rem] shadow-xl shadow-blue-100 flex items-center justify-between group active:scale-95 transition-all">
+                                    <div className="text-left">
+                                        <h3 className="text-xl font-black italic">SMART PRACTICE</h3>
+                                        <p className="text-[10px] opacity-70 font-bold uppercase tracking-wider">5 Adaptive Questions</p>
                                     </div>
-                                    <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/5 rounded-full blur-2xl group-hover:scale-150 transition-transform"></div>
+                                    <Icon name="chevron-right" className="w-6 h-6 group-hover:translate-x-1 transition-transform" />
                                 </button>
                             </div>
                         )}
 
-                        {view === 'leaderboard' && <LeaderboardView appId={appId} currentUserId={user.uid} />}
-
                         {view === 'quiz' && (
                             <div className="space-y-6 fade-in">
-                                <div className="flex justify-between items-center text-[10px] font-black text-slate-400 uppercase tracking-tighter px-2">
-                                    <button onClick={() => setView('lobby')} className="hover:text-red-500 transition-colors">✕ CANCEL SESSION</button>
-                                    <div className="bg-slate-900 text-white px-4 py-1.5 rounded-full">{currentIndex + 1} / {currentQuiz.length}</div>
+                                <div className="flex justify-between items-center text-[10px] font-black text-slate-400 uppercase">
+                                    <span>Question {currentIndex + 1} of {currentQuiz.length}</span>
+                                    <button onClick={() => setView('lobby')}>Quit</button>
                                 </div>
-                                <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-xl min-h-[160px] flex items-center justify-center px-8">
-                                    <h2 className="text-xl font-black text-slate-800 text-center leading-tight">
-                                        {currentQuiz[currentIndex].text}
-                                    </h2>
+                                <div className="bg-white p-8 rounded-[2rem] border shadow-sm min-h-[120px] flex items-center justify-center text-center">
+                                    <p className="text-lg font-bold text-slate-800 leading-snug">{currentQuiz[currentIndex].text}</p>
                                 </div>
-                                <div className="grid gap-3">
+                                <div className="space-y-3">
                                     {currentQuiz[currentIndex].options.map((opt, i) => (
                                         <button key={i} disabled={!!feedback} onClick={() => handleAnswer(i)}
-                                            className={`w-full p-6 rounded-[1.5rem] text-left font-bold border-2 transition-all flex items-center gap-4
+                                            className={`w-full p-5 rounded-2xl text-left font-bold border-2 transition-all flex items-center gap-3
                                             ${!feedback ? 'bg-white border-slate-50 hover:border-blue-400 shadow-sm' : ''}
                                             ${feedback === 'correct' && i === currentQuiz[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : ''}
                                             ${feedback === 'wrong' && i === currentQuiz[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : ''}
-                                            ${feedback === 'wrong' && i !== currentQuiz[currentIndex].correct_answer ? 'opacity-30 scale-[0.98] border-slate-50' : ''}`}>
-                                            <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black ${feedback === 'correct' && i === currentQuiz[currentIndex].correct_answer ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                                                {String.fromCharCode(65+i)}
-                                            </span>
-                                            <span className="flex-1">{opt}</span>
+                                            ${feedback === 'wrong' && i !== currentQuiz[currentIndex].correct_answer ? 'opacity-40 grayscale border-slate-50' : ''}`}>
+                                            <span className="w-6 h-6 bg-slate-100 rounded flex items-center justify-center text-[10px]">{String.fromCharCode(65+i)}</span>
+                                            {opt}
                                         </button>
                                     ))}
                                 </div>
@@ -421,18 +300,10 @@
                         )}
 
                         {view === 'results' && (
-                            <div className="text-center space-y-8 fade-in py-10">
-                                <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 mx-auto">
-                                    <Icon name="award" className="w-10 h-10" />
-                                </div>
-                                <h2 className="text-3xl font-black text-slate-900 italic tracking-tighter uppercase">SESSION COMPLETE</h2>
-                                <div className="bg-white p-12 rounded-[3rem] border border-slate-100 shadow-2xl inline-block px-20">
-                                    <div className="text-[10px] font-black text-slate-300 uppercase mb-2 tracking-widest">Correct Answers</div>
-                                    <div className="text-7xl font-black text-blue-600 tracking-tighter">{sessionScore}<span className="text-2xl text-slate-200">/5</span></div>
-                                </div>
-                                <button onClick={() => setView('lobby')} className="block w-full bg-slate-900 text-white p-6 rounded-[2rem] font-black hover:bg-blue-700 transition-all shadow-xl active:scale-95">
-                                    BACK TO DASHBOARD
-                                </button>
+                            <div className="text-center py-12 space-y-6 fade-in">
+                                <div className="text-5xl font-black text-blue-600">{sessionScore} / {currentQuiz.length}</div>
+                                <p className="font-bold text-slate-500">Practice complete! Your data has been synced.</p>
+                                <button onClick={() => setView('lobby')} className="w-full bg-slate-900 text-white p-5 rounded-2xl font-black">Return Home</button>
                             </div>
                         )}
                     </main>
