@@ -37,7 +37,7 @@
     <!-- Firebase SDK Setup -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, getDocs, addDoc, serverTimestamp, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -53,8 +53,8 @@
         const auth = getAuth(app);
         const provider = new GoogleAuthProvider();
 
-        // Ensure session persistence
-        setPersistence(auth, browserSessionPersistence);
+        // Use Local Persistence instead of Session for better compatibility with mobile browsers (iOS Safari)
+        setPersistence(auth, browserLocalPersistence).catch(err => console.error("Persistence error:", err));
 
         window.FirebaseSDK = {
             auth,
@@ -114,9 +114,12 @@
                 const sdk = window.FirebaseSDK;
                 
                 const unsubAuth = sdk.onAuthStateChanged(sdk.auth, (u) => {
-                    authChecked.current = true;
-                    setUser(u);
-                    setLoading(false);
+                    // Small delay to ensure state propagates on slower mobile connections
+                    setTimeout(() => {
+                        authChecked.current = true;
+                        setUser(u);
+                        setLoading(false);
+                    }, 100);
                 });
                 return () => unsubAuth();
             }, [sdkReady]);
@@ -194,7 +197,7 @@
             };
 
             const handleLogin = async () => {
-                setLoading(true); // Prevent UI flash
+                setLoading(true);
                 try {
                     await window.FirebaseSDK.login();
                 } catch (error) {
@@ -203,7 +206,6 @@
                 }
             };
 
-            // Don't show anything until we are sure if the user is logged in or not
             if (!sdkReady || loading || !authChecked.current) return (
                 <div className="h-screen flex items-center justify-center bg-slate-50">
                     <div className="text-center space-y-4">
@@ -233,7 +235,7 @@
                                 Sign in with Google
                             </button>
                             
-                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Secure Student Portal v2.1</p>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Secure Student Portal v2.2</p>
                         </div>
                     </div>
                 );
@@ -241,7 +243,6 @@
 
             return (
                 <div className="min-h-screen">
-                    {/* Header */}
                     <header className="bg-white/80 backdrop-blur-md border-b sticky top-0 z-50 px-6 py-4 flex justify-between items-center">
                         <div className="flex items-center gap-2">
                             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-200">
