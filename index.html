@@ -22,12 +22,29 @@
     <script type="text/babel">
         const { useState, useEffect } = React;
         
-        // Configuration - Environment variables provided by Canvas
-        const firebaseConfig = JSON.parse(__firebase_config);
+        // Safety check for environment variables
+        const getFirebaseConfig = () => {
+            try {
+                if (typeof __firebase_config !== 'undefined') {
+                    return JSON.parse(__firebase_config);
+                }
+            } catch (e) {
+                console.error("Firebase config parsing failed:", e);
+            }
+            // Fallback empty config to prevent crash (User should provide this)
+            return {};
+        };
+
+        const firebaseConfig = getFirebaseConfig();
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
         // Initialize Firebase using compat mode
-        firebase.initializeApp(firebaseConfig);
+        if (firebaseConfig.apiKey) {
+            if (!firebase.apps.length) {
+                firebase.initializeApp(firebaseConfig);
+            }
+        }
+        
         const auth = firebase.auth();
         const db = firebase.firestore();
 
@@ -76,7 +93,10 @@
                     });
                     setTopics(Array.from(tags).sort());
                     setLoading(false);
-                }, err => console.error("Topics load fail:", err));
+                }, err => {
+                    console.error("Topics load fail:", err);
+                    setLoading(false);
+                });
 
                 // Load User Stats
                 const statsRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('attempts');
@@ -96,21 +116,25 @@
 
             const startQuiz = async (topic) => {
                 setLoading(true);
-                const qRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('questions');
-                const snapshot = await qRef.get();
-                const filtered = snapshot.docs
-                    .map(doc => ({ id: doc.id, ...doc.data() }))
-                    .filter(q => {
-                        const t = q.topic_tags || q.topic || q.tags || ["General"];
-                        return Array.isArray(t) ? t.includes(topic) : t === topic;
-                    });
-                
-                setQuestions(filtered);
-                setCurrentTopic(topic);
-                setCurrentIndex(0);
-                setSessionScore(0);
-                setFeedback(null);
-                setView('quiz');
+                try {
+                    const qRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('questions');
+                    const snapshot = await qRef.get();
+                    const filtered = snapshot.docs
+                        .map(doc => ({ id: doc.id, ...doc.data() }))
+                        .filter(q => {
+                            const t = q.topic_tags || q.topic || q.tags || ["General"];
+                            return Array.isArray(t) ? t.includes(topic) : t === topic;
+                        });
+                    
+                    setQuestions(filtered);
+                    setCurrentTopic(topic);
+                    setCurrentIndex(0);
+                    setSessionScore(0);
+                    setFeedback(null);
+                    setView('quiz');
+                } catch (e) {
+                    console.error("Error loading quiz:", e);
+                }
                 setLoading(false);
             };
 
@@ -155,7 +179,14 @@
                 }, 1200);
             };
 
-            if (!user || loading) return <div className="flex h-screen items-center justify-center font-bold text-slate-400">Loading Classroom...</div>;
+            if (!user || loading) {
+                return (
+                    <div className="flex h-screen items-center justify-center flex-col gap-4">
+                        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <div className="font-bold text-slate-400">Syncing with Classroom...</div>
+                    </div>
+                );
+            }
 
             return (
                 <div className="min-h-screen bg-slate-50 pb-10 antialiased font-sans">
