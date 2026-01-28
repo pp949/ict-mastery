@@ -10,8 +10,9 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
-        .animate-in { animation: fadeIn 0.5s ease-out forwards; }
+        .animate-in { animation: fadeIn 0.4s ease-out forwards; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .progress-bar { transition: width 1s cubic-bezier(0.4, 0, 0.2, 1); }
     </style>
 
     <!-- React Dependencies -->
@@ -34,32 +35,30 @@
             browserLocalPersistence, signOut 
         } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
         import { 
-            getFirestore, collection, onSnapshot, addDoc, getDocs, serverTimestamp 
+            getFirestore, collection, onSnapshot, addDoc, getDocs, serverTimestamp, query, orderBy 
         } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
 
-        // --- REPLACE THIS WITH YOUR FIREBASE CONFIG FROM CONSOLE ---
         const firebaseConfig = {
-        apiKey: "AIzaSyDSpaXWx2_qT88ffyTdmH43j63PUyJ82-4",
-        authDomain: "ict-learning-platform.firebaseapp.com",
-        projectId: "ict-learning-platform",
-        storageBucket: "ict-learning-platform.firebasestorage.app",
-        messagingSenderId: "720934184836",
-        appId: "1:720934184836:web:2360db67abb324890e1fd1",
-        measurementId: "G-2CF8HRGW6C"
+            apiKey: "AIzaSyDSpaXWx2_qT88ffyTdmH43j63PUyJ82-4",
+            authDomain: "ict-learning-platform.firebaseapp.com",
+            projectId: "ict-learning-platform",
+            storageBucket: "ict-learning-platform.firebasestorage.app",
+            messagingSenderId: "720934184836",
+            appId: "1:720934184836:web:2360db67abb324890e1fd1",
+            measurementId: "G-2CF8HRGW6C"
         };
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
         
-        // Expose to window for the Babel script
         window.FB = { 
             auth, db, 
             providers: { GoogleAuthProvider },
             methods: { 
                 onAuthStateChanged, signInAnonymously, signInWithRedirect, 
                 getRedirectResult, setPersistence, browserLocalPersistence, 
-                signOut, collection, onSnapshot, addDoc, getDocs, serverTimestamp 
+                signOut, collection, onSnapshot, addDoc, getDocs, serverTimestamp, query, orderBy
             }
         };
         window.dispatchEvent(new Event('firebase-ready'));
@@ -69,9 +68,8 @@
     <script type="text/babel">
         const { useState, useEffect } = React;
 
-        // Simple Icon Component for Deployment
         const Icon = ({ name, className }) => {
-            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name, className]);
             return <i data-lucide={name} className={className}></i>;
         };
 
@@ -86,8 +84,10 @@
             const [feedback, setFeedback] = useState(null);
             const [sessionScore, setSessionScore] = useState(0);
             const [userStats, setUserStats] = useState({ total: 0, correct: 0 });
-            const appId = "default-app-id"; // Adjust if using multi-tenant
+            
+            const appId = "default-app-id";
 
+            // Auth Handshake
             useEffect(() => {
                 const init = async () => {
                     if (!window.FB) {
@@ -96,8 +96,10 @@
                     }
                     const { auth, methods } = window.FB;
                     
-                    await methods.setPersistence(auth, methods.browserLocalPersistence);
-                    const result = await methods.getRedirectResult(auth);
+                    try {
+                        await methods.setPersistence(auth, methods.browserLocalPersistence);
+                        await methods.getRedirectResult(auth);
+                    } catch(e) { console.error("Auth error", e); }
                     
                     methods.onAuthStateChanged(auth, (u) => {
                         setUser(u);
@@ -108,20 +110,25 @@
                 init();
             }, []);
 
+            // Data Streams
             useEffect(() => {
                 if (!user || !window.FB) return;
                 const { db, methods } = window.FB;
 
+                // Load Questions and Extract Tags
                 const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
                 const unsubTopics = methods.onSnapshot(qRef, (snap) => {
                     const tags = new Set();
                     snap.forEach(doc => {
-                        const t = doc.data().topic || "General";
-                        tags.add(t);
+                        const data = doc.data();
+                        const t = data.topic_tags || data.topic || data.tags || "General";
+                        if (Array.isArray(t)) t.forEach(tag => tags.add(tag));
+                        else tags.add(t);
                     });
                     setTopics(Array.from(tags).sort());
                 });
 
+                // Load Global Stats (Private to User)
                 const statsRef = methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
                 const unsubStats = methods.onSnapshot(statsRef, (snap) => {
                     let correct = 0;
@@ -132,15 +139,25 @@
                 return () => { unsubTopics(); unsubStats(); };
             }, [user]);
 
+            const handleGoogleSignIn = async () => {
+                const { auth, providers, methods } = window.FB;
+                const provider = new providers.GoogleAuthProvider();
+                await methods.signInWithRedirect(auth, provider);
+            };
+
             const startQuiz = async (topic) => {
                 const { db, methods } = window.FB;
                 const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
                 const snapshot = await methods.getDocs(qRef);
                 const filtered = snapshot.docs
                     .map(d => ({ id: d.id, ...d.data() }))
-                    .filter(q => q.topic === topic);
+                    .filter(q => {
+                        const t = q.topic_tags || q.topic || q.tags || "General";
+                        return Array.isArray(t) ? t.includes(topic) : t === topic;
+                    });
                 
-                setQuestions(filtered);
+                if (filtered.length === 0) return;
+                setQuestions(filtered.sort(() => Math.random() - 0.5).slice(0, 10));
                 setCurrentTopic(topic);
                 setCurrentIndex(0);
                 setSessionScore(0);
@@ -156,8 +173,18 @@
                 setFeedback(correct ? 'correct' : 'wrong');
                 if (correct) setSessionScore(s => s + 1);
 
+                // Record private attempt
                 await methods.addDoc(methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts'), {
                     question_id: q.id,
+                    isCorrect: correct,
+                    topic: currentTopic,
+                    timestamp: methods.serverTimestamp()
+                });
+
+                // Record for teacher activity feed
+                await methods.addDoc(methods.collection(db, 'artifacts', appId, 'public', 'data', 'activity_feed'), {
+                    uid: user.uid,
+                    topic: currentTopic,
                     isCorrect: correct,
                     timestamp: methods.serverTimestamp()
                 });
@@ -169,61 +196,115 @@
                     } else {
                         setView('results');
                     }
-                }, 1000);
+                }, 1200);
             };
 
             if (authChecking) return (
-                <div className="h-screen flex items-center justify-center">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                <div className="h-screen flex items-center justify-center bg-slate-50">
+                    <div className="animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent"></div>
                 </div>
             );
 
             return (
-                <div className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-xl overflow-hidden flex flex-col">
-                    <header className="bg-white p-6 border-b flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                            <Icon name="book-open" className="text-blue-600 w-6 h-6" />
-                            <h1 className="font-bold text-xl">ICT Master</h1>
+                <div className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-2xl overflow-hidden flex flex-col border-x border-slate-200">
+                    <header className="bg-white p-5 border-b sticky top-0 z-50 flex justify-between items-center shadow-sm">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-blue-600 p-2 rounded-xl text-white shadow-lg shadow-blue-200">
+                                <Icon name="graduation-cap" className="w-5 h-5" />
+                            </div>
+                            <h1 className="font-black text-xl italic tracking-tighter">ICT MASTER</h1>
                         </div>
-                        <div className="bg-blue-600 text-white px-3 py-1 rounded-full text-sm font-bold flex items-center gap-2">
-                            <Icon name="trophy" className="w-4 h-4" />
-                            {userStats.correct}
+                        <div className="flex items-center gap-3">
+                            <div className="bg-blue-50 text-blue-700 px-3 py-1.5 rounded-2xl text-sm font-black flex items-center gap-2 border border-blue-100">
+                                <Icon name="award" className="w-4 h-4" />
+                                {userStats.correct}
+                            </div>
+                            {user?.photoURL && (
+                                <img src={user.photoURL} className="w-8 h-8 rounded-full border border-slate-200" alt="avatar" />
+                            )}
                         </div>
                     </header>
 
-                    <main className="p-4 flex-1">
+                    <main className="p-4 flex-1 overflow-y-auto">
                         {view === 'lobby' && (
-                            <div className="space-y-4 animate-in">
-                                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                                    <h2 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-2">My Progress</h2>
-                                    <p className="text-4xl font-black">{userStats.total} <span className="text-sm font-normal text-slate-400">Attempts</span></p>
+                            <div className="space-y-6 animate-in">
+                                {/* Profile Card */}
+                                <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm relative overflow-hidden">
+                                    <div className="flex items-center gap-4 mb-6">
+                                        <div className="bg-slate-100 w-12 h-12 rounded-2xl flex items-center justify-center">
+                                            <Icon name="user" className="text-slate-400" />
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Student Portal</p>
+                                            <p className="font-bold text-slate-800">{user?.displayName || "Guest Student"}</p>
+                                        </div>
+                                        {user?.isAnonymous && (
+                                            <button onClick={handleGoogleSignIn} className="ml-auto text-[10px] bg-blue-600 text-white font-black px-3 py-1 rounded-full uppercase">Sync</button>
+                                        )}
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        <div className="flex justify-between items-end">
+                                            <p className="text-4xl font-black">{userStats.total}</p>
+                                            <p className="text-sm font-bold text-blue-600">
+                                                {userStats.total > 0 ? Math.round((userStats.correct / userStats.total) * 100) : 0}% Accuracy
+                                            </p>
+                                        </div>
+                                        <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                                            <div 
+                                                className="bg-blue-600 h-full progress-bar shadow-sm" 
+                                                style={{ width: `${userStats.total > 0 ? (userStats.correct / userStats.total) * 100 : 0}%` }}
+                                            />
+                                        </div>
+                                    </div>
+                                    <Icon name="activity" className="absolute -right-4 -bottom-4 w-24 h-24 text-blue-50 opacity-20" />
                                 </div>
-                                <h3 className="font-bold text-lg px-2">Choose a Topic</h3>
-                                <div className="grid gap-3">
-                                    {topics.length > 0 ? topics.map(t => (
-                                        <button key={t} onClick={() => startQuiz(t)} className="bg-white p-5 rounded-2xl border border-slate-200 text-left font-bold flex justify-between items-center hover:border-blue-500 transition-all">
-                                            {t} <Icon name="chevron-right" className="text-slate-300" />
-                                        </button>
-                                    )) : <p className="text-center py-10 text-slate-400">No questions loaded yet.</p>}
+
+                                <div className="space-y-3">
+                                    <h3 className="font-black text-slate-800 text-lg flex items-center gap-2 px-2">
+                                        <Icon name="book-open" className="w-5 h-5 text-blue-500" />
+                                        STUDY TOPICS
+                                    </h3>
+                                    <div className="grid gap-3">
+                                        {topics.length > 0 ? topics.map(t => (
+                                            <button key={t} onClick={() => startQuiz(t)} className="bg-white p-5 rounded-2xl border border-slate-200 text-left font-bold flex justify-between items-center hover:border-blue-500 hover:shadow-md transition-all active:scale-[0.98] group">
+                                                <span className="text-slate-700">{t}</span>
+                                                <Icon name="arrow-right" className="text-slate-300 group-hover:text-blue-500 transition-colors" />
+                                            </button>
+                                        )) : (
+                                            <div className="text-center py-12 bg-white rounded-3xl border border-dashed border-slate-300">
+                                                <p className="text-slate-400 font-medium">Waiting for question bank...</p>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         )}
 
                         {view === 'quiz' && (
                             <div className="space-y-6 animate-in">
-                                <div className="bg-white p-8 rounded-3xl border border-slate-200 text-center">
-                                    <h2 className="text-xl font-bold">{questions[currentIndex].text}</h2>
+                                <div className="flex justify-between items-center px-2">
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{currentTopic}</span>
+                                    <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Q{currentIndex + 1} / {questions.length}</span>
+                                </div>
+                                <div className="bg-white p-8 rounded-[2.5rem] border-2 border-slate-100 shadow-sm min-h-[200px] flex items-center justify-center text-center">
+                                    <h2 className="text-xl font-black text-slate-800 leading-tight">{questions[currentIndex].text}</h2>
                                 </div>
                                 <div className="grid gap-3">
                                     {questions[currentIndex].options.map((opt, i) => (
                                         <button 
                                             key={i} 
+                                            disabled={!!feedback}
                                             onClick={() => handleAnswer(i)}
-                                            className={`p-5 rounded-2xl border-2 text-left font-bold transition-all ${
-                                                feedback === null ? 'bg-white border-slate-100 hover:border-blue-500' : 
-                                                (i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : 'bg-white opacity-50')
+                                            className={`p-5 rounded-2xl border-2 text-left font-bold transition-all flex items-center gap-4 ${
+                                                feedback === null ? 'bg-white border-slate-100 hover:border-blue-500 hover:bg-blue-50' : 
+                                                (i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : 
+                                                (feedback === 'wrong' && i !== questions[currentIndex].correct_answer ? 'opacity-40 border-slate-100' : 'bg-white border-slate-100'))
                                             }`}
                                         >
+                                            <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black ${feedback && i === questions[currentIndex].correct_answer ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                {String.fromCharCode(65 + i)}
+                                            </span>
                                             {opt}
                                         </button>
                                     ))}
@@ -232,11 +313,25 @@
                         )}
 
                         {view === 'results' && (
-                            <div className="text-center py-10 space-y-6 animate-in">
-                                <Icon name="check-circle" className="w-20 h-20 text-green-500 mx-auto" />
-                                <h2 className="text-3xl font-black">Session Done!</h2>
-                                <p className="text-slate-500 font-bold">You got {sessionScore} correct.</p>
-                                <button onClick={() => setView('lobby')} className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold">Back to Lobby</button>
+                            <div className="text-center py-10 space-y-8 animate-in">
+                                <div className="w-24 h-24 bg-blue-600 text-white rounded-full flex items-center justify-center mx-auto shadow-2xl shadow-blue-200">
+                                    <Icon name="check" className="w-12 h-12" />
+                                </div>
+                                <div>
+                                    <h2 className="text-4xl font-black italic italic tracking-tighter">GOOD JOB!</h2>
+                                    <p className="text-slate-500 font-bold mt-2 uppercase text-xs tracking-widest">Practice Session Complete</p>
+                                </div>
+                                <div className="bg-white p-6 rounded-3xl border border-slate-200 grid grid-cols-2 gap-4">
+                                    <div className="text-center">
+                                        <p className="text-3xl font-black text-blue-600">{sessionScore}</p>
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase">Correct</p>
+                                    </div>
+                                    <div className="text-center border-l border-slate-100">
+                                        <p className="text-3xl font-black text-slate-800">{questions.length}</p>
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase">Questions</p>
+                                    </div>
+                                </div>
+                                <button onClick={() => setView('lobby')} className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black shadow-xl shadow-slate-200 active:scale-95 transition-all">BACK TO LOBBY</button>
                             </div>
                         )}
                     </main>
