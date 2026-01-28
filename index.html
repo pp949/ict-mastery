@@ -3,249 +3,228 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DSE ICT Mastery</title>
+    <title>DSE ICT Mastery - Student Portal</title>
+    
+    <!-- Styling & Fonts -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
-        .loading-spin { animation: spin 1s linear infinite; }
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .animate-in { animation: fadeIn 0.5s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
+
+    <!-- React Dependencies -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
     <div id="root"></div>
 
+    <!-- Firebase SDK Setup -->
     <script type="module">
-        // Firebase Modular Imports
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
         import { 
-            getAuth, 
-            onAuthStateChanged, 
-            signInAnonymously, 
-            signInWithCustomToken 
-        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+            getAuth, onAuthStateChanged, signInAnonymously, signInWithRedirect, 
+            getRedirectResult, GoogleAuthProvider, setPersistence, 
+            browserLocalPersistence, signOut 
+        } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
         import { 
-            getFirestore, 
-            collection, 
-            onSnapshot, 
-            addDoc, 
-            serverTimestamp,
-            query 
-        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+            getFirestore, collection, onSnapshot, addDoc, getDocs, serverTimestamp 
+        } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
 
-        // Configuration and Initialization
-        const firebaseConfig = JSON.parse(__firebase_config);
+        // --- REPLACE THIS WITH YOUR FIREBASE CONFIG FROM CONSOLE ---
+        const firebaseConfig = {
+        apiKey: "AIzaSyDSpaXWx2_qT88ffyTdmH43j63PUyJ82-4",
+        authDomain: "ict-learning-platform.firebaseapp.com",
+        projectId: "ict-learning-platform",
+        storageBucket: "ict-learning-platform.firebasestorage.app",
+        messagingSenderId: "720934184836",
+        appId: "1:720934184836:web:2360db67abb324890e1fd1",
+        measurementId: "G-2CF8HRGW6C"
+        };
+
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-        // Bridge to React
-        window.FirebaseCore = {
-            auth, db, appId,
+        
+        // Expose to window for the Babel script
+        window.FB = { 
+            auth, db, 
+            providers: { GoogleAuthProvider },
             methods: { 
-                onAuthStateChanged, signInAnonymously, signInWithCustomToken,
-                collection, onSnapshot, addDoc, serverTimestamp, query
+                onAuthStateChanged, signInAnonymously, signInWithRedirect, 
+                getRedirectResult, setPersistence, browserLocalPersistence, 
+                signOut, collection, onSnapshot, addDoc, getDocs, serverTimestamp 
             }
         };
         window.dispatchEvent(new Event('firebase-ready'));
     </script>
 
+    <!-- Main App Logic -->
     <script type="text/babel">
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect } = React;
 
-        // Simple Icon Wrapper for Lucide
+        // Simple Icon Component for Deployment
         const Icon = ({ name, className }) => {
-            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name, className]);
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} className={className}></i>;
         };
 
         function App() {
             const [user, setUser] = useState(null);
-            const [status, setStatus] = useState("initializing");
-            const [questions, setQuestions] = useState([]);
-            const [attempts, setAttempts] = useState([]);
+            const [authChecking, setAuthChecking] = useState(true);
             const [view, setView] = useState('lobby');
-            const [quiz, setQuiz] = useState([]);
-            const [idx, setIdx] = useState(0);
-            const [score, setScore] = useState(0);
+            const [topics, setTopics] = useState([]);
+            const [currentTopic, setCurrentTopic] = useState(null);
+            const [questions, setQuestions] = useState([]);
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [feedback, setFeedback] = useState(null);
+            const [sessionScore, setSessionScore] = useState(0);
+            const [userStats, setUserStats] = useState({ total: 0, correct: 0 });
+            const appId = "default-app-id"; // Adjust if using multi-tenant
 
-            // 1. Handle Authentication
             useEffect(() => {
-                const setupAuth = async () => {
-                    if (!window.FirebaseCore) {
-                        window.addEventListener('firebase-ready', setupAuth);
+                const init = async () => {
+                    if (!window.FB) {
+                        window.addEventListener('firebase-ready', init);
                         return;
                     }
-
-                    const { auth, methods } = window.FirebaseCore;
+                    const { auth, methods } = window.FB;
                     
-                    const initSignIn = async () => {
-                        try {
-                            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                                await methods.signInWithCustomToken(auth, __initial_auth_token);
-                            } else {
-                                await methods.signInAnonymously(auth);
-                            }
-                        } catch (err) {
-                            console.error("Auth error:", err);
-                            setStatus("error");
-                        }
-                    };
-
-                    initSignIn();
-                    return methods.onAuthStateChanged(auth, (u) => {
-                        if (u) {
-                            setUser(u);
-                            setStatus("ready");
-                        }
+                    await methods.setPersistence(auth, methods.browserLocalPersistence);
+                    const result = await methods.getRedirectResult(auth);
+                    
+                    methods.onAuthStateChanged(auth, (u) => {
+                        setUser(u);
+                        setAuthChecking(false);
+                        if (!u) methods.signInAnonymously(auth);
                     });
                 };
-
-                const unsubAuth = setupAuth();
-                return () => { if (typeof unsubAuth === 'function') unsubAuth(); };
+                init();
             }, []);
 
-            // 2. Data Listeners
             useEffect(() => {
-                if (status !== "ready" || !user) return;
-                const { db, appId, methods } = window.FirebaseCore;
+                if (!user || !window.FB) return;
+                const { db, methods } = window.FB;
 
-                // Listen for Questions (Public)
                 const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
-                const unsubQ = methods.onSnapshot(qRef, (snap) => {
-                    setQuestions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                }, (err) => console.error("Firestore Q Error:", err));
+                const unsubTopics = methods.onSnapshot(qRef, (snap) => {
+                    const tags = new Set();
+                    snap.forEach(doc => {
+                        const t = doc.data().topic || "General";
+                        tags.add(t);
+                    });
+                    setTopics(Array.from(tags).sort());
+                });
 
-                // Listen for Personal Attempts (Private)
-                const aRef = methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
-                const unsubA = methods.onSnapshot(aRef, (snap) => {
-                    setAttempts(snap.docs.map(d => d.data()));
-                }, (err) => console.error("Firestore A Error:", err));
+                const statsRef = methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
+                const unsubStats = methods.onSnapshot(statsRef, (snap) => {
+                    let correct = 0;
+                    snap.forEach(d => { if (d.data().isCorrect) correct++; });
+                    setUserStats({ total: snap.size, correct });
+                });
 
-                return () => { unsubQ(); unsubA(); };
-            }, [status, user]);
+                return () => { unsubTopics(); unsubStats(); };
+            }, [user]);
 
-            const startQuiz = () => {
-                if (questions.length === 0) return;
-                setQuiz(_.sampleSize(questions, 5));
-                setIdx(0);
-                setScore(0);
+            const startQuiz = async (topic) => {
+                const { db, methods } = window.FB;
+                const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+                const snapshot = await methods.getDocs(qRef);
+                const filtered = snapshot.docs
+                    .map(d => ({ id: d.id, ...d.data() }))
+                    .filter(q => q.topic === topic);
+                
+                setQuestions(filtered);
+                setCurrentTopic(topic);
+                setCurrentIndex(0);
+                setSessionScore(0);
                 setView('quiz');
             };
 
-            const submitAnswer = async (choiceIdx) => {
-                const currentQ = quiz[idx];
-                const isCorrect = choiceIdx === currentQ.correct_answer;
-                if (isCorrect) setScore(s => s + 1);
+            const handleAnswer = async (idx) => {
+                if (feedback) return;
+                const q = questions[currentIndex];
+                const correct = idx === q.correct_answer;
+                const { db, methods } = window.FB;
 
-                const { db, appId, methods } = window.FirebaseCore;
-                
-                // Record attempt
+                setFeedback(correct ? 'correct' : 'wrong');
+                if (correct) setSessionScore(s => s + 1);
+
                 await methods.addDoc(methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts'), {
-                    questionId: currentQ.id,
-                    isCorrect,
-                    timestamp: methods.serverTimestamp(),
-                    topic: currentQ.topic || "General"
-                });
-
-                // Record for teacher activity feed
-                await methods.addDoc(methods.collection(db, 'artifacts', appId, 'public', 'data', 'activity_feed'), {
-                    uid: user.uid,
-                    isCorrect,
-                    topic: currentQ.topic || "General",
+                    question_id: q.id,
+                    isCorrect: correct,
                     timestamp: methods.serverTimestamp()
                 });
 
-                if (idx + 1 < quiz.length) setIdx(idx + 1);
-                else setView('results');
+                setTimeout(() => {
+                    if (currentIndex + 1 < questions.length) {
+                        setCurrentIndex(c => c + 1);
+                        setFeedback(null);
+                    } else {
+                        setView('results');
+                    }
+                }, 1000);
             };
 
-            if (status === "initializing") return (
-                <div className="h-screen flex flex-col items-center justify-center gap-4">
-                    <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full loading-spin"></div>
-                    <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Connecting to Campus...</p>
+            if (authChecking) return (
+                <div className="h-screen flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                 </div>
             );
 
             return (
-                <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col">
-                    <header className="p-6 flex justify-between items-center bg-white border-b sticky top-0 z-10">
+                <div className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-xl overflow-hidden flex flex-col">
+                    <header className="bg-white p-6 border-b flex justify-between items-center">
                         <div className="flex items-center gap-2">
-                            <div className="bg-blue-600 p-2 rounded-lg text-white">
-                                <Icon name="graduation-cap" className="w-5 h-5" />
-                            </div>
-                            <h1 className="font-black text-xl italic tracking-tighter">ICT MASTER</h1>
+                            <Icon name="book-open" className="text-blue-600 w-6 h-6" />
+                            <h1 className="font-bold text-xl">ICT Master</h1>
                         </div>
-                        <div className="flex items-center gap-2 bg-blue-50 px-3 py-1 rounded-full border border-blue-100">
-                            <Icon name="award" className="w-4 h-4 text-blue-600" />
-                            <span className="text-sm font-black text-blue-700">{attempts.filter(a => a.isCorrect).length}</span>
+                        <div className="bg-blue-600 text-white px-3 py-1 rounded-full text-sm font-bold flex items-center gap-2">
+                            <Icon name="trophy" className="w-4 h-4" />
+                            {userStats.correct}
                         </div>
                     </header>
 
-                    <main className="flex-1 p-4">
+                    <main className="p-4 flex-1">
                         {view === 'lobby' && (
-                            <div className="space-y-6">
-                                <div className="bg-slate-900 rounded-[2.5rem] p-8 text-white relative overflow-hidden shadow-2xl">
-                                    <div className="relative z-10">
-                                        <h2 className="text-3xl font-black italic leading-none">PRACTICE<br/>MAKES PERFECT</h2>
-                                        <p className="text-slate-400 text-sm mt-3">Test your DSE ICT knowledge.</p>
-                                        <button 
-                                            onClick={startQuiz}
-                                            disabled={questions.length === 0}
-                                            className="mt-8 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 w-full py-4 rounded-2xl font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20"
-                                        >
-                                            {questions.length === 0 ? "NO QUESTIONS LOADED" : "START DAILY DRILL"}
-                                            <Icon name="play" className="w-4 h-4 fill-current" />
-                                        </button>
-                                    </div>
-                                    <Icon name="cpu" className="absolute -right-6 -bottom-6 w-40 h-40 opacity-10" />
+                            <div className="space-y-4 animate-in">
+                                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                                    <h2 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-2">My Progress</h2>
+                                    <p className="text-4xl font-black">{userStats.total} <span className="text-sm font-normal text-slate-400">Attempts</span></p>
                                 </div>
-
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="bg-white p-6 rounded-3xl border border-slate-200">
-                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Done</p>
-                                        <p className="text-3xl font-black text-slate-800">{attempts.length}</p>
-                                    </div>
-                                    <div className="bg-white p-6 rounded-3xl border border-slate-200">
-                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Accuracy</p>
-                                        <p className="text-3xl font-black text-blue-600">
-                                            {attempts.length > 0 ? Math.round((attempts.filter(a=>a.isCorrect).length/attempts.length)*100) : 0}%
-                                        </p>
-                                    </div>
+                                <h3 className="font-bold text-lg px-2">Choose a Topic</h3>
+                                <div className="grid gap-3">
+                                    {topics.length > 0 ? topics.map(t => (
+                                        <button key={t} onClick={() => startQuiz(t)} className="bg-white p-5 rounded-2xl border border-slate-200 text-left font-bold flex justify-between items-center hover:border-blue-500 transition-all">
+                                            {t} <Icon name="chevron-right" className="text-slate-300" />
+                                        </button>
+                                    )) : <p className="text-center py-10 text-slate-400">No questions loaded yet.</p>}
                                 </div>
                             </div>
                         )}
 
                         {view === 'quiz' && (
-                            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                                <div className="flex justify-between items-center px-2">
-                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Q{idx + 1} OF {quiz.length}</span>
-                                    <div className="h-1.5 w-32 bg-slate-200 rounded-full overflow-hidden">
-                                        <div className="h-full bg-blue-600 transition-all" style={{width: `${((idx+1)/quiz.length)*100}%`}}></div>
-                                    </div>
+                            <div className="space-y-6 animate-in">
+                                <div className="bg-white p-8 rounded-3xl border border-slate-200 text-center">
+                                    <h2 className="text-xl font-bold">{questions[currentIndex].text}</h2>
                                 </div>
-
-                                <div className="bg-white p-8 rounded-[2rem] border-2 border-slate-100 shadow-sm min-h-[180px] flex items-center justify-center text-center">
-                                    <p className="text-xl font-bold text-slate-800 leading-tight">{quiz[idx].text}</p>
-                                </div>
-
                                 <div className="grid gap-3">
-                                    {quiz[idx].options.map((opt, i) => (
+                                    {questions[currentIndex].options.map((opt, i) => (
                                         <button 
                                             key={i} 
-                                            onClick={() => submitAnswer(i)} 
-                                            className="w-full p-5 bg-white border-2 border-slate-100 rounded-2xl text-left font-bold hover:border-blue-500 hover:bg-blue-50 active:scale-[0.98] transition-all flex items-center gap-4 group"
+                                            onClick={() => handleAnswer(i)}
+                                            className={`p-5 rounded-2xl border-2 text-left font-bold transition-all ${
+                                                feedback === null ? 'bg-white border-slate-100 hover:border-blue-500' : 
+                                                (i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : 'bg-white opacity-50')
+                                            }`}
                                         >
-                                            <span className="w-10 h-10 bg-slate-100 group-hover:bg-blue-100 group-hover:text-blue-600 rounded-xl flex items-center justify-center text-sm text-slate-400 font-black transition-colors">
-                                                {String.fromCharCode(65+i)}
-                                            </span>
-                                            <span className="text-slate-700">{opt}</span>
+                                            {opt}
                                         </button>
                                     ))}
                                 </div>
@@ -253,20 +232,11 @@
                         )}
 
                         {view === 'results' && (
-                            <div className="flex-1 flex flex-col items-center justify-center py-10 space-y-6 text-center animate-in zoom-in-95 duration-300">
-                                <div className="w-24 h-24 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center shadow-inner">
-                                    <Icon name="check" className="w-12 h-12" />
-                                </div>
-                                <div>
-                                    <h2 className="text-4xl font-black italic tracking-tighter">GOOD WORK!</h2>
-                                    <p className="text-slate-500 font-bold mt-2">You mastered {score} questions in this session.</p>
-                                </div>
-                                <button 
-                                    onClick={() => setView('lobby')} 
-                                    className="w-full max-w-xs py-5 bg-slate-900 text-white rounded-2xl font-black shadow-xl shadow-slate-200 active:scale-95 transition-all"
-                                >
-                                    BACK TO DASHBOARD
-                                </button>
+                            <div className="text-center py-10 space-y-6 animate-in">
+                                <Icon name="check-circle" className="w-20 h-20 text-green-500 mx-auto" />
+                                <h2 className="text-3xl font-black">Session Done!</h2>
+                                <p className="text-slate-500 font-bold">You got {sessionScore} correct.</p>
+                                <button onClick={() => setView('lobby')} className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold">Back to Lobby</button>
                             </div>
                         )}
                     </main>
