@@ -34,26 +34,10 @@
 <body class="bg-[#f8fafc]">
     <div id="root"></div>
 
-    <!-- 
-      SECURE FIRESTORE RULES (Copy these to Firebase Console > Firestore > Rules):
-      
-      rules_version = '2';
-      service cloud.firestore {
-        match /databases/{database}/documents {
-          match /artifacts/default-app-id/public/data/{document=**} {
-            allow read: if request.auth != null;
-          }
-          match /artifacts/default-app-id/users/{userId}/{document=**} {
-            allow read, write: if request.auth != null && request.auth.uid == userId;
-          }
-        }
-      }
-    -->
-
     <!-- Firebase SDK Setup -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithRedirect, getRedirectResult, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, getDocs, addDoc, serverTimestamp, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -72,7 +56,8 @@
         window.FirebaseSDK = {
             auth,
             db: getFirestore(app),
-            login: () => signInWithPopup(auth, provider),
+            login: () => signInWithRedirect(auth, provider),
+            getRedirectResult: () => getRedirectResult(auth),
             logout: () => signOut(auth),
             onAuthStateChanged,
             collection,
@@ -81,15 +66,19 @@
             serverTimestamp,
             onSnapshot
         };
+
+        // Notify the app that Firebase is ready
+        window.dispatchEvent(new CustomEvent('firebase-initialized'));
     </script>
 
     <script type="text/babel">
         const { useState, useEffect } = React;
-        const getFirebase = () => window.FirebaseSDK;
         const appId = "default-app-id";
 
         const Icon = ({ name, className }) => {
-            useEffect(() => { lucide.createIcons(); }, []);
+            useEffect(() => { 
+                if (window.lucide) window.lucide.createIcons(); 
+            }, [name]);
             return <i data-lucide={name} className={className}></i>;
         };
 
@@ -104,21 +93,33 @@
             const [sessionScore, setSessionScore] = useState(0);
             const [userStats, setUserStats] = useState({ total: 0, correct: 0 });
             const [loading, setLoading] = useState(true);
+            const [isInitialized, setIsInitialized] = useState(!!window.FirebaseSDK);
 
+            // Handle SDK Readiness
             useEffect(() => {
-                const sdk = getFirebase();
-                if (!sdk) return;
+                const initListener = () => setIsInitialized(true);
+                window.addEventListener('firebase-initialized', initListener);
+                return () => window.removeEventListener('firebase-initialized', initListener);
+            }, []);
+
+            // Handle Auth State
+            useEffect(() => {
+                if (!isInitialized) return;
+                const sdk = window.FirebaseSDK;
+                
+                sdk.getRedirectResult().catch(err => console.error("Auth Redirect Error:", err));
 
                 const unsubAuth = sdk.onAuthStateChanged(sdk.auth, (u) => {
                     setUser(u);
                     setLoading(false);
                 });
                 return () => unsubAuth();
-            }, []);
+            }, [isInitialized]);
 
+            // Load Data
             useEffect(() => {
-                const sdk = getFirebase();
-                if (!user || !sdk) return;
+                if (!user || !isInitialized) return;
+                const sdk = window.FirebaseSDK;
 
                 const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
                 const unsubTopics = sdk.onSnapshot(qRef, (snap) => {
@@ -138,27 +139,31 @@
                 });
 
                 return () => { unsubTopics(); unsubStats(); };
-            }, [user]);
+            }, [user, isInitialized]);
 
             const startQuiz = async (topic) => {
-                const sdk = getFirebase();
+                const sdk = window.FirebaseSDK;
                 setLoading(true);
-                const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
-                const snap = await sdk.getDocs(qRef);
-                const filtered = snap.docs
-                    .map(doc => ({ id: doc.id, ...doc.data() }))
-                    .filter(q => (q.topic_tags || []).includes(topic));
-                
-                setQuestions(filtered);
-                setCurrentTopic(topic);
-                setCurrentIndex(0);
-                setSessionScore(0);
-                setView('quiz');
+                try {
+                    const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
+                    const snap = await sdk.getDocs(qRef);
+                    const filtered = snap.docs
+                        .map(doc => ({ id: doc.id, ...doc.data() }))
+                        .filter(q => (q.topic_tags || []).includes(topic));
+                    
+                    setQuestions(filtered);
+                    setCurrentTopic(topic);
+                    setCurrentIndex(0);
+                    setSessionScore(0);
+                    setView('quiz');
+                } catch (e) {
+                    console.error(e);
+                }
                 setLoading(false);
             };
 
             const handleAnswer = async (index) => {
-                const sdk = getFirebase();
+                const sdk = window.FirebaseSDK;
                 if (feedback) return;
                 const q = questions[currentIndex];
                 const isCorrect = index === q.correct_answer;
@@ -183,9 +188,12 @@
                 }, 1000);
             };
 
-            if (loading) return (
-                <div className="h-screen flex items-center justify-center">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            if (!isInitialized || loading) return (
+                <div className="h-screen flex items-center justify-center bg-slate-50">
+                    <div className="text-center space-y-4">
+                        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto"></div>
+                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Connecting to Portal...</p>
+                    </div>
                 </div>
             );
 
@@ -202,7 +210,7 @@
                             </div>
                             
                             <button 
-                                onClick={() => getFirebase().login()}
+                                onClick={() => window.FirebaseSDK.login()}
                                 className="google-btn w-full py-4 px-6 rounded-2xl flex items-center justify-center gap-3 font-bold shadow-sm"
                             >
                                 <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" />
@@ -226,7 +234,7 @@
                             <span className="font-extrabold text-slate-800 tracking-tight">ICT MASTERY</span>
                         </div>
                         <div className="flex items-center gap-3">
-                            <button onClick={() => getFirebase().logout()} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
+                            <button onClick={() => window.FirebaseSDK.logout()} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
                                 <Icon name="log-out" className="w-5 h-5" />
                             </button>
                             <div className="bg-blue-50 border border-blue-100 px-3 py-1.5 rounded-2xl flex items-center gap-2">
@@ -241,10 +249,10 @@
                             <div className="space-y-8 fade-in">
                                 <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-xl shadow-slate-200/50">
                                     <div className="flex items-center gap-3 mb-6">
-                                        <img src={user.photoURL} className="w-10 h-10 rounded-full border-2 border-white shadow-sm" />
+                                        {user.photoURL && <img src={user.photoURL} className="w-10 h-10 rounded-full border-2 border-white shadow-sm" />}
                                         <div>
                                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">Welcome back,</p>
-                                            <p className="font-black text-slate-800 tracking-tight">{user.displayName.split(' ')[0]}</p>
+                                            <p className="font-black text-slate-800 tracking-tight">{user.displayName ? user.displayName.split(' ')[0] : 'Student'}</p>
                                         </div>
                                     </div>
                                     <h2 className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-2">Overall Progress</h2>
