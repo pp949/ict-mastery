@@ -229,8 +229,9 @@
                 // Try to get result from a redirect (Google Login)
                 const result = await getRedirectResult(auth);
                 if (result?.user) {
-                    console.log("Logged in via redirect");
-                    return; // onAuthStateChanged will handle UI
+                    currentUser = result.user;
+                    setupApp(result.user);
+                    return;
                 }
 
                 // Monitor auth state
@@ -239,7 +240,6 @@
                         currentUser = user;
                         setupApp(user);
                     } else if (!isRedirecting) {
-                        // Fallback to anonymous
                         signInAnonymously(auth);
                     }
                 });
@@ -268,27 +268,36 @@
             refreshIcons();
         }
 
-        // 3. Data Sync (Rule 1 & 2)
+        // 3. Data Sync (Rule 1, 2 & 3)
         function listenForData(user) {
+            // Guard: Must be authenticated to start listeners (Rule 3)
+            if (!user) return;
+
             // Topics Listener
             const qPath = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
-            onSnapshot(qPath, (snapshot) => {
-                const tags = new Set();
-                snapshot.forEach(doc => {
-                    const data = doc.data();
-                    const t = data.topic_tags || data.topic || data.tags || ["General"];
-                    (Array.isArray(t) ? t : [t]).forEach(tag => tags.add(tag));
-                });
-                renderTopics(Array.from(tags).sort());
-            });
+            onSnapshot(qPath, 
+                (snapshot) => {
+                    const tags = new Set();
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        const t = data.topic_tags || data.topic || data.tags || ["General"];
+                        (Array.isArray(t) ? t : [t]).forEach(tag => tags.add(tag));
+                    });
+                    renderTopics(Array.from(tags).sort());
+                },
+                (err) => console.error("Topics Listener Error:", err)
+            );
 
             // Stats Listener
             const statsPath = collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
-            onSnapshot(statsPath, (snapshot) => {
-                let correct = 0;
-                snapshot.forEach(doc => { if (doc.data().isCorrect) correct++; });
-                updateStatsUI(snapshot.size, correct);
-            });
+            onSnapshot(statsPath, 
+                (snapshot) => {
+                    let correct = 0;
+                    snapshot.forEach(doc => { if (doc.data().isCorrect) correct++; });
+                    updateStatsUI(snapshot.size, correct);
+                },
+                (err) => console.error("Stats Listener Error:", err)
+            );
         }
 
         function renderTopics(topics) {
@@ -326,23 +335,29 @@
 
         // 4. Quiz Logic
         window.startQuiz = async (topic) => {
+            if (!currentUser) return;
             currentTopic = topic;
             loadingOverlay.classList.remove('hidden');
             
-            const qPath = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
-            const snap = await getDocs(qPath);
-            currentQuestions = snap.docs
-                .map(d => ({ id: d.id, ...d.data() }))
-                .filter(q => {
-                    const t = q.topic_tags || q.topic || q.tags || ["General"];
-                    return Array.isArray(t) ? t.includes(topic) : t === topic;
-                });
-            
-            currentIndex = 0;
-            sessionScore = 0;
-            loadingOverlay.classList.add('hidden');
-            showView('quiz');
-            renderQuestion();
+            try {
+                const qPath = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+                const snap = await getDocs(qPath);
+                currentQuestions = snap.docs
+                    .map(d => ({ id: d.id, ...d.data() }))
+                    .filter(q => {
+                        const t = q.topic_tags || q.topic || q.tags || ["General"];
+                        return Array.isArray(t) ? t.includes(topic) : t === topic;
+                    });
+                
+                currentIndex = 0;
+                sessionScore = 0;
+                loadingOverlay.classList.add('hidden');
+                showView('quiz');
+                renderQuestion();
+            } catch (err) {
+                console.error("Quiz load error:", err);
+                loadingOverlay.classList.add('hidden');
+            }
         };
 
         function renderQuestion() {
@@ -383,15 +398,17 @@
                 correctBtn.classList.add('bg-green-50', 'border-green-500', 'text-green-800');
             }
 
-            // Sync to Firebase
-            try {
-                await addDoc(collection(db, 'artifacts', appId, 'users', currentUser.uid, 'attempts'), {
-                    question_id: q.id, topic: currentTopic, isCorrect, timestamp: serverTimestamp()
-                });
-                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'activity_feed'), {
-                    uid: currentUser.uid, userName: currentUser.displayName || 'Guest', topic: currentTopic, isCorrect, timestamp: serverTimestamp()
-                });
-            } catch (e) { console.error("Sync error", e); }
+            // Sync to Firebase (Rule 3 guard)
+            if (currentUser) {
+                try {
+                    await addDoc(collection(db, 'artifacts', appId, 'users', currentUser.uid, 'attempts'), {
+                        question_id: q.id, topic: currentTopic, isCorrect, timestamp: serverTimestamp()
+                    });
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'activity_feed'), {
+                        uid: currentUser.uid, userName: currentUser.displayName || 'Guest', topic: currentTopic, isCorrect, timestamp: serverTimestamp()
+                    });
+                } catch (e) { console.error("Sync error", e); }
+            }
 
             setTimeout(() => {
                 if (currentIndex + 1 < currentQuestions.length) {
