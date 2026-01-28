@@ -119,6 +119,7 @@
             const [loading, setLoading] = useState(true);
             const [sdkReady, setSdkReady] = useState(false);
             const [showDebug, setShowDebug] = useState(false);
+            const [activity, setActivity] = useState([]); // Teacher Bridge Stats
             
             // Allow dynamic AppID switching for testing
             const [appId, setAppId] = useState(localStorage.getItem('ict_app_id') || "default-app-id");
@@ -151,13 +152,12 @@
                 if (!user || !sdkReady) return;
                 const sdk = window.FirebaseSDK;
 
-                // Watch for questions to extract topics
+                // 1. Watch for questions to extract topics
                 const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
                 const unsubTopics = sdk.onSnapshot(qRef, (snap) => {
                     const tags = new Set();
                     if (snap.empty) {
                         setTopics([]);
-                        console.log("No questions found in Firestore for AppID:", appId);
                     } else {
                         snap.forEach(doc => {
                             const data = doc.data();
@@ -171,7 +171,7 @@
                     setTopics([]);
                 });
 
-                // Watch private stats
+                // 2. Watch private stats (Personal)
                 const statsRef = sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts');
                 const unsubStats = sdk.onSnapshot(statsRef, (snap) => {
                     let correct = 0;
@@ -179,7 +179,21 @@
                     setUserStats({ total: snap.size, correct });
                 });
 
-                return () => { unsubTopics(); unsubStats(); };
+                // 3. Teacher Bridge: Global Activity Feed
+                const activityRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'activity_feed');
+                const unsubActivity = sdk.onSnapshot(activityRef, (snap) => {
+                    const logs = [];
+                    snap.forEach(doc => logs.push({ id: doc.id, ...doc.data() }));
+                    // Sort locally as per Rule 2: No complex queries
+                    logs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+                    setActivity(logs.slice(0, 10)); // Show last 10 activities
+                }, (err) => console.error("Activity Feed Error:", err));
+
+                return () => { 
+                    unsubTopics(); 
+                    unsubStats(); 
+                    unsubActivity();
+                };
             }, [user, sdkReady, appId]);
 
             const updateAppId = (newId) => {
@@ -248,7 +262,9 @@
                         isCorrect,
                         timestamp: sdk.serverTimestamp()
                     };
+                    // Save to user path (Private)
                     await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts'), eventData);
+                    // Save to activity feed (Public - for Teacher Bridge)
                     await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'activity_feed'), eventData);
                 } catch (e) { console.error("Sync Error:", e); }
 
@@ -318,7 +334,7 @@
                                     className="bg-white border border-yellow-200 p-2 rounded w-full text-blue-600 font-bold"
                                     placeholder="Enter your specific appId"
                                 />
-                                <p className="text-yellow-600 italic">Changing this will reload data from the new path.</p>
+                                <p className="text-yellow-600 italic">Changing this reloads all data (Questions & Global Stats).</p>
                             </div>
                             <div className="flex gap-2">
                                 <button onClick={seedQuestions} className="bg-yellow-600 text-white px-3 py-1.5 rounded font-bold uppercase tracking-wider">Add Sample Data</button>
@@ -327,7 +343,7 @@
                         </div>
                     )}
 
-                    <main className="max-w-xl mx-auto p-4 pt-8">
+                    <main className="max-w-xl mx-auto p-4 pt-8 pb-20">
                         {view === 'lobby' && (
                             <div className="space-y-8 fade-in">
                                 <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-xl shadow-slate-200/50">
@@ -347,14 +363,41 @@
                                     </div>
                                 </div>
 
+                                {/* Teacher Bridge Section */}
+                                <div className="space-y-3">
+                                    <h3 className="font-extrabold text-slate-800 text-lg px-2 flex items-center gap-2">
+                                        <Icon name="rss" className="w-4 h-4 text-blue-500" />
+                                        Teacher Bridge
+                                    </h3>
+                                    <div className="bg-slate-900 rounded-[1.5rem] p-4 text-white overflow-hidden">
+                                        {activity.length === 0 ? (
+                                            <p className="text-slate-500 text-xs italic p-4 text-center">Waiting for classroom activity...</p>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                {activity.map((log, idx) => (
+                                                    <div key={log.id || idx} className="flex items-center justify-between border-b border-white/5 pb-2 last:border-0">
+                                                        <div className="flex flex-col">
+                                                            <span className="text-[11px] font-bold truncate max-w-[120px]">{log.displayName}</span>
+                                                            <span className="text-[9px] text-slate-400">{log.topic}</span>
+                                                        </div>
+                                                        <div className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${log.isCorrect ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                                            {log.isCorrect ? 'Correct' : 'Incorrect'}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
                                 <div className="grid gap-3">
                                     <h3 className="font-extrabold text-slate-800 text-lg px-2">Domains</h3>
                                     {topics.length === 0 ? (
                                         <div className="bg-white p-10 rounded-[1.5rem] border border-dashed border-slate-200 text-center text-slate-400">
                                             <Icon name="search" className="w-8 h-8 mx-auto mb-3 opacity-20" />
                                             <p className="font-bold">No questions found</p>
-                                            <p className="text-[10px] mt-1">Current App ID: <span className="text-blue-500 font-mono">{appId}</span></p>
-                                            <button onClick={() => setShowDebug(true)} className="mt-4 text-blue-600 text-[10px] font-black uppercase tracking-widest hover:underline">Adjust App ID Settings</button>
+                                            <p className="text-[10px] mt-1">Check App ID: <span className="text-blue-500 font-mono">{appId}</span></p>
+                                            <button onClick={() => setShowDebug(true)} className="mt-4 text-blue-600 text-[10px] font-black uppercase tracking-widest hover:underline">Open Settings</button>
                                         </div>
                                     ) : (
                                         topics.map(t => (
