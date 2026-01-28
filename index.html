@@ -16,18 +16,46 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
         .fade-in { animation: fadeIn 0.4s ease-out forwards; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Custom Auth Button Style */
+        .google-btn {
+            background: white;
+            color: #374151;
+            border: 1px solid #e5e7eb;
+            transition: all 0.2s;
+        }
+        .google-btn:hover {
+            background: #f9fafb;
+            border-color: #d1d5db;
+            transform: translateY(-1px);
+        }
     </style>
 </head>
 <body class="bg-[#f8fafc]">
     <div id="root"></div>
 
+    <!-- 
+      SECURE FIRESTORE RULES (Copy these to Firebase Console > Firestore > Rules):
+      
+      rules_version = '2';
+      service cloud.firestore {
+        match /databases/{database}/documents {
+          match /artifacts/default-app-id/public/data/{document=**} {
+            allow read: if request.auth != null;
+          }
+          match /artifacts/default-app-id/users/{userId}/{document=**} {
+            allow read, write: if request.auth != null && request.auth.uid == userId;
+          }
+        }
+      }
+    -->
+
     <!-- Firebase SDK Setup -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, getDocs, addDoc, serverTimestamp, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // IMPORTANT: Update this config with your actual Firebase Console keys
         const firebaseConfig = {
             apiKey: "AIzaSyDSpaXWx2_qT88ffyTdmH43j63PUyJ82-4",
             authDomain: "ict-learning-platform.firebaseapp.com",
@@ -38,10 +66,14 @@
         };
 
         const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const provider = new GoogleAuthProvider();
+
         window.FirebaseSDK = {
-            auth: getAuth(app),
+            auth,
             db: getFirestore(app),
-            signInAnonymously,
+            login: () => signInWithPopup(auth, provider),
+            logout: () => signOut(auth),
             onAuthStateChanged,
             collection,
             getDocs,
@@ -53,13 +85,9 @@
 
     <script type="text/babel">
         const { useState, useEffect } = React;
-        
-        // Wait for Firebase SDK to be ready on window
         const getFirebase = () => window.FirebaseSDK;
-
         const appId = "default-app-id";
 
-        // Icon Component Helper
         const Icon = ({ name, className }) => {
             useEffect(() => { lucide.createIcons(); }, []);
             return <i data-lucide={name} className={className}></i>;
@@ -82,8 +110,8 @@
                 if (!sdk) return;
 
                 const unsubAuth = sdk.onAuthStateChanged(sdk.auth, (u) => {
-                    if (u) setUser(u);
-                    else sdk.signInAnonymously(sdk.auth);
+                    setUser(u);
+                    setLoading(false);
                 });
                 return () => unsubAuth();
             }, []);
@@ -100,7 +128,6 @@
                         (Array.isArray(t) ? t : [t]).forEach(tag => tags.add(tag));
                     });
                     setTopics(Array.from(tags).sort());
-                    setLoading(false);
                 });
 
                 const statsRef = sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts');
@@ -162,6 +189,32 @@
                 </div>
             );
 
+            if (!user) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
+                        <div className="max-w-md w-full text-center space-y-8 fade-in">
+                            <div className="space-y-4">
+                                <div className="w-20 h-20 bg-blue-600 rounded-3xl mx-auto flex items-center justify-center text-white shadow-2xl shadow-blue-200">
+                                    <Icon name="book-open" className="w-10 h-10" />
+                                </div>
+                                <h1 className="text-3xl font-black text-slate-800 tracking-tight italic">ICT MASTERY</h1>
+                                <p className="text-slate-500 font-medium">Please sign in with your school Google account to start your practice session.</p>
+                            </div>
+                            
+                            <button 
+                                onClick={() => getFirebase().login()}
+                                className="google-btn w-full py-4 px-6 rounded-2xl flex items-center justify-center gap-3 font-bold shadow-sm"
+                            >
+                                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" />
+                                Sign in with Google
+                            </button>
+                            
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Secure Student Portal v2.0</p>
+                        </div>
+                    </div>
+                );
+            }
+
             return (
                 <div className="min-h-screen">
                     {/* Header */}
@@ -173,10 +226,9 @@
                             <span className="font-extrabold text-slate-800 tracking-tight">ICT MASTERY</span>
                         </div>
                         <div className="flex items-center gap-3">
-                            <div className="text-right hidden sm:block">
-                                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mastery</div>
-                                <div className="text-xs font-black text-slate-700">{userStats.total > 0 ? Math.round((userStats.correct/userStats.total)*100) : 0}%</div>
-                            </div>
+                            <button onClick={() => getFirebase().logout()} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
+                                <Icon name="log-out" className="w-5 h-5" />
+                            </button>
                             <div className="bg-blue-50 border border-blue-100 px-3 py-1.5 rounded-2xl flex items-center gap-2">
                                 <Icon name="trophy" className="w-4 h-4 text-blue-600" />
                                 <span className="text-sm font-black text-blue-700">{userStats.correct}</span>
@@ -188,23 +240,30 @@
                         {view === 'lobby' && (
                             <div className="space-y-8 fade-in">
                                 <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-xl shadow-slate-200/50">
+                                    <div className="flex items-center gap-3 mb-6">
+                                        <img src={user.photoURL} className="w-10 h-10 rounded-full border-2 border-white shadow-sm" />
+                                        <div>
+                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">Welcome back,</p>
+                                            <p className="font-black text-slate-800 tracking-tight">{user.displayName.split(' ')[0]}</p>
+                                        </div>
+                                    </div>
                                     <h2 className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-2">Overall Progress</h2>
                                     <div className="text-5xl font-black text-slate-900 mb-6 tracking-tighter">
-                                        {userStats.total} <span className="text-lg text-slate-300 font-bold uppercase tracking-normal">Attempts</span>
+                                        {userStats.total > 0 ? Math.round((userStats.correct/userStats.total)*100) : 0}% <span className="text-lg text-slate-300 font-bold uppercase tracking-normal">Mastery</span>
                                     </div>
                                     <div className="w-full bg-slate-100 h-4 rounded-full overflow-hidden mb-2">
                                         <div className="bg-gradient-to-r from-blue-600 to-indigo-500 h-full transition-all duration-1000 rounded-full" style={{width: `${userStats.total > 0 ? (userStats.correct/userStats.total)*100 : 0}%`}}></div>
                                     </div>
                                     <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
-                                        <span>Current Rank: Apprentice</span>
-                                        <span>Next Rank: 100pts</span>
+                                        <span>{userStats.total} Questions Answered</span>
+                                        <span>Rank: Apprentice</span>
                                     </div>
                                 </div>
 
                                 <div className="space-y-4">
                                     <h3 className="font-extrabold text-slate-800 text-lg px-2">Ready to Practice?</h3>
                                     <div className="grid gap-3">
-                                        {topics.length === 0 && <div className="p-10 text-center text-slate-400 font-medium">No topics found yet. Sync data in Teacher Bridge!</div>}
+                                        {topics.length === 0 && <div className="p-10 text-center text-slate-400 font-medium bg-white rounded-3xl border border-dashed border-slate-200">No topics found yet. Sync data in Teacher Bridge!</div>}
                                         {topics.map(t => (
                                             <button key={t} onClick={() => startQuiz(t)} className="group w-full bg-white p-6 rounded-[1.5rem] border border-slate-100 shadow-sm flex justify-between items-center hover:border-blue-400 hover:shadow-lg active:scale-95 transition-all">
                                                 <div className="flex items-center gap-4">
