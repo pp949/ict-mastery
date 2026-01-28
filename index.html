@@ -8,353 +8,222 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
-        .animate-pop { animation: pop 0.3s ease-out; }
-        @keyframes pop {
-            0% { transform: scale(0.95); opacity: 0; }
-            100% { transform: scale(1); opacity: 1; }
-        }
-        #app.hidden { display: none !important; }
-        #loading-overlay { transition: opacity 0.5s ease-out; }
+        body { font-family: 'Inter', sans-serif; background-color: #f1f5f9; }
+        .view { display: none; }
+        .view.active { display: block; animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     </style>
 </head>
 <body class="antialiased text-slate-900">
 
-    <!-- Loading Overlay -->
-    <div id="loading-overlay" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-50">
-        <div class="text-center">
-            <div class="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-            <p id="loading-text" class="text-slate-600 font-bold tracking-tight">Initializing ICT Mastery...</p>
-            <p id="loading-subtext" class="text-slate-400 text-xs mt-2">Connecting to secure session...</p>
+    <!-- Simple Header -->
+    <header class="bg-white border-b px-4 py-3 flex justify-between items-center sticky top-0 z-50">
+        <div class="flex items-center gap-2">
+            <div class="bg-blue-600 p-1.5 rounded-lg text-white">
+                <i data-lucide="book-open" class="w-4 h-4"></i>
+            </div>
+            <h1 class="font-bold text-slate-800">ICT Mastery</h1>
         </div>
-    </div>
+        <div class="flex items-center gap-3">
+            <div id="status-dot" class="w-2 h-2 rounded-full bg-slate-300"></div>
+            <div class="bg-blue-100 px-3 py-1 rounded-full flex items-center gap-2">
+                <i data-lucide="trophy" class="w-3 h-3 text-blue-600"></i>
+                <span id="score-badge" class="text-xs font-black text-blue-700">0</span>
+            </div>
+        </div>
+    </header>
 
-    <!-- App Container -->
-    <div id="app" class="min-h-screen pb-10 hidden">
-        <header class="bg-white border-b px-6 py-4 flex justify-between items-center sticky top-0 z-20 shadow-sm">
-            <div class="flex items-center gap-3">
-                <div class="bg-blue-600 p-2 rounded-xl text-white">
-                    <i data-lucide="book-open" class="w-5 h-5"></i>
+    <main class="max-w-xl mx-auto p-4">
+        
+        <!-- Lobby View -->
+        <div id="view-lobby" class="view active space-y-6">
+            <div class="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm">
+                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Your Progress</p>
+                <div class="flex items-baseline gap-2">
+                    <span id="stats-total" class="text-4xl font-black text-slate-900">0</span>
+                    <span class="text-slate-400 font-bold text-xs uppercase">Total Attempts</span>
                 </div>
-                <div>
-                    <h1 class="text-lg font-black text-slate-900 leading-none">ICT Mastery</h1>
-                    <div class="flex items-center gap-2 mt-1">
-                        <span id="auth-status-tag" class="text-[10px] text-blue-500 font-bold uppercase tracking-tighter">Syncing...</span>
+                <div class="mt-4 h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div id="progress-bar" class="bg-blue-600 h-full w-0 transition-all duration-500"></div>
+                </div>
+            </div>
+
+            <div class="space-y-3">
+                <h3 class="font-bold text-slate-700 px-1">Available Topics</h3>
+                <div id="topics-list" class="grid gap-2">
+                    <div class="bg-white p-6 rounded-2xl border border-slate-100 text-center">
+                        <p class="text-slate-400 text-sm">Loading topics...</p>
                     </div>
                 </div>
             </div>
-            <div class="flex items-center gap-3">
-                <button id="btn-signout" class="p-2 text-slate-400 hover:text-red-500 hidden">
-                    <i data-lucide="log-out" class="w-5 h-5"></i>
+        </div>
+
+        <!-- Quiz View -->
+        <div id="view-quiz" class="view space-y-4">
+            <div class="flex justify-between items-center">
+                <button onclick="showView('lobby')" class="text-xs font-bold text-slate-400 flex items-center gap-1">
+                    <i data-lucide="arrow-left" class="w-3 h-3"></i> Exit
                 </button>
-                <div class="bg-blue-600 px-3 py-1.5 rounded-xl flex items-center gap-2 shadow-sm">
-                    <i data-lucide="trophy" class="w-4 h-4 text-white"></i>
-                    <span id="score-badge" class="text-sm font-black text-white">0</span>
-                </div>
+                <span id="quiz-topic-label" class="text-[10px] font-black bg-slate-800 text-white px-2 py-0.5 rounded uppercase">Topic</span>
             </div>
-        </header>
-
-        <main class="max-w-2xl mx-auto p-4 sm:p-6">
-            <!-- Lobby View -->
-            <div id="view-lobby" class="space-y-6 animate-pop">
-                <div id="login-banner" class="bg-blue-600 rounded-3xl p-6 text-white shadow-xl flex flex-col sm:flex-row items-center justify-between gap-6 hidden">
-                    <div class="text-center sm:text-left">
-                        <h3 class="font-black text-xl mb-1">Backup your data!</h3>
-                        <p class="text-blue-100 text-sm">Link your account to save scores permanently.</p>
-                    </div>
-                    <button id="btn-google-login" class="bg-white text-blue-700 px-8 py-3 rounded-2xl font-black text-sm active:scale-95 transition-all whitespace-nowrap">
-                        Link Account
-                    </button>
-                </div>
-
-                <div class="bg-white rounded-[2rem] p-8 border border-slate-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-4">
-                        <div>
-                            <h2 class="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-1">Learning Momentum</h2>
-                            <div class="flex items-baseline gap-2">
-                                <span id="stats-total" class="text-6xl font-black text-slate-900 tracking-tighter">0</span>
-                                <span class="text-slate-400 font-bold uppercase text-xs">Attempts</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="w-full bg-slate-100 rounded-full h-4 p-1">
-                        <div id="stats-progress-bar" class="bg-blue-600 h-2 rounded-full transition-all duration-1000" style="width: 0%"></div>
-                    </div>
-                </div>
-
-                <div class="space-y-4">
-                    <div class="flex items-center justify-between px-2">
-                        <h3 class="text-slate-900 font-black text-xl">Practice Modules</h3>
-                        <button onclick="window.location.reload()" class="text-slate-400 hover:text-blue-600">
-                             <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-                        </button>
-                    </div>
-                    <div id="topics-list" class="grid gap-3">
-                         <div class="animate-pulse space-y-3">
-                             <div class="h-20 bg-slate-100 rounded-3xl w-full"></div>
-                             <div class="h-20 bg-slate-100 rounded-3xl w-full"></div>
-                         </div>
-                    </div>
-                </div>
+            <div class="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 text-center">
+                <h2 id="question-text" class="text-lg font-bold text-slate-800"></h2>
             </div>
+            <div id="options-container" class="grid gap-2"></div>
+        </div>
 
-            <!-- Quiz View -->
-            <div id="view-quiz" class="space-y-6 animate-pop hidden">
-                <div class="flex justify-between items-center">
-                    <button id="btn-quit-quiz" class="text-[10px] font-black text-slate-400 hover:text-red-500 flex items-center gap-2 uppercase tracking-widest">
-                        <i data-lucide="x-circle" class="w-4 h-4"></i> Cancel
-                    </button>
-                    <div id="quiz-topic-title" class="px-4 py-1 bg-slate-900 rounded-full text-white text-[10px] font-black uppercase">Topic</div>
-                </div>
-                <div class="bg-white p-10 rounded-[2.5rem] shadow-sm border border-slate-200 text-center min-h-[200px] flex items-center justify-center">
-                    <h2 id="quiz-question-text" class="text-2xl font-black text-slate-900 leading-tight"></h2>
-                </div>
-                <div id="quiz-options" class="grid gap-3"></div>
+        <!-- Results View -->
+        <div id="view-results" class="view text-center space-y-6 py-10">
+            <div class="w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center text-white mx-auto shadow-lg">
+                <i data-lucide="check" class="w-10 h-10"></i>
             </div>
-
-            <!-- Results View -->
-            <div id="view-results" class="text-center space-y-8 animate-pop py-10 hidden">
-                <div class="w-32 h-32 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-xl mx-auto">
-                    <i data-lucide="trophy" class="w-16 h-16"></i>
-                </div>
-                <h2 class="text-5xl font-black text-slate-900 tracking-tighter">Well Done!</h2>
-                <div class="bg-white rounded-[2.5rem] p-10 border border-slate-200 shadow-sm max-w-sm mx-auto">
-                    <div id="result-score" class="text-4xl font-black text-blue-600">0</div>
-                    <div class="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Correct Answers</div>
-                </div>
-                <button onclick="window.showLobby()" class="bg-blue-600 text-white px-10 py-4 rounded-2xl font-black active:scale-95 transition-all">
-                    Return Home
+            <h2 class="text-3xl font-black text-slate-900">Finished!</h2>
+            <div class="bg-white p-6 rounded-3xl border border-slate-200 inline-block px-10">
+                <p id="final-score" class="text-4xl font-black text-blue-600">0 / 0</p>
+                <p class="text-[10px] font-bold text-slate-400 uppercase mt-1">Score</p>
+            </div>
+            <div>
+                <button onclick="showView('lobby')" class="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold active:scale-95 transition-all">
+                    Back to Home
                 </button>
             </div>
-        </main>
-    </div>
+        </div>
+    </main>
 
-    <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-        import { 
-            getAuth, 
-            signInAnonymously, 
-            onAuthStateChanged, 
-            GoogleAuthProvider, 
-            signInWithRedirect, 
-            getRedirectResult,
-            signOut,
-            setPersistence,
-            browserLocalPersistence
-        } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-        import { 
-            getFirestore, 
-            collection, 
-            getDocs, 
-            addDoc, 
-            onSnapshot, 
-            serverTimestamp 
-        } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, onSnapshot, getDocs, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         const firebaseConfig = JSON.parse(__firebase_config);
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        
-        let currentUser = null;
-        let currentQuestions = [];
-        let currentIndex = 0;
-        let sessionScore = 0;
-        let currentTopic = "";
-        let isAppReady = false;
 
-        const overlay = document.getElementById('loading-overlay');
-        const appEl = document.getElementById('app');
+        let user = null;
+        let questions = [];
+        let currentIdx = 0;
+        let score = 0;
+        let activeTopic = "";
 
-        // IMMEDIATE REVEAL STRATEGY
-        // We reveal the UI almost instantly. Auth happens in parallel.
-        function revealApp() {
-            if (isAppReady) return;
-            isAppReady = true;
-            overlay.style.opacity = '0';
-            setTimeout(() => {
-                overlay.style.display = 'none';
-                appEl.classList.remove('hidden');
-                lucide.createIcons();
-            }, 500);
-        }
+        // UI Helpers
+        window.showView = (id) => {
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById(`view-${id}`).classList.add('active');
+            lucide.createIcons();
+        };
 
-        // Wait max 1.5 seconds for Firebase, then show app anyway
-        setTimeout(revealApp, 1500);
-
-        async function startAuth() {
-            try {
-                // Ensure persistence
-                await setPersistence(auth, browserLocalPersistence).catch(() => {});
-                
-                // Handle redirect results silently
-                getRedirectResult(auth).catch(() => {});
-
-                // Listen for changes
-                onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        currentUser = user;
-                        setupApp(user);
-                        revealApp(); // Reveal immediately once user is confirmed
-                    } else {
-                        // Attempt silent anon sign-in
-                        signInAnonymously(auth).catch(() => {
-                            revealApp(); // Reveal even if sign-in fails
-                            document.getElementById('auth-status-tag').innerText = 'Guest Mode';
-                        });
-                    }
-                });
-            } catch (err) {
-                console.warn("Auth setup silent error", err);
-                revealApp();
+        // Auth initialization
+        onAuthStateChanged(auth, (u) => {
+            if (u) {
+                user = u;
+                document.getElementById('status-dot').className = "w-2 h-2 rounded-full bg-green-500";
+                loadData();
+            } else {
+                signInAnonymously(auth).catch(e => console.error("Anon login failed", e));
             }
-        }
+        });
 
-        function setupApp(user) {
-            const statusTag = document.getElementById('auth-status-tag');
-            if (statusTag) {
-                statusTag.innerText = user.isAnonymous ? 'Guest Mode' : (user.displayName || 'Linked Account');
-            }
-            
-            document.getElementById('login-banner').classList.toggle('hidden', !user.isAnonymous);
-            document.getElementById('btn-signout').classList.toggle('hidden', user.isAnonymous);
-            
-            listenForData(user);
-        }
-
-        function listenForData(user) {
-            if (!user) return;
-
-            // Public Questions
-            const qPath = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
-            onSnapshot(qPath, (snap) => {
-                const tags = new Set();
-                snap.forEach(d => {
-                    const data = d.data();
+        function loadData() {
+            // Topics Listener
+            const qRef = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+            onSnapshot(qRef, (snap) => {
+                const topics = new Set();
+                snap.forEach(doc => {
+                    const data = doc.data();
                     const t = data.topic || data.topic_tags || "General";
-                    if (Array.isArray(t)) t.forEach(tag => tags.add(tag));
-                    else tags.add(t);
+                    if (Array.isArray(t)) t.forEach(tag => topics.add(tag));
+                    else topics.add(t);
                 });
-                renderTopics(Array.from(tags).sort());
-            }, (err) => {
-                renderTopics([]); // Clear skeletons
+                renderTopics(Array.from(topics).sort());
             });
 
-            // Private Stats
-            const statsPath = collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
-            onSnapshot(statsPath, (snap) => {
+            // Stats Listener
+            const sRef = collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
+            onSnapshot(sRef, (snap) => {
                 let correct = 0;
-                snap.forEach(d => { if (d.data().isCorrect) correct++; });
+                snap.forEach(doc => { if (doc.data().isCorrect) correct++; });
                 document.getElementById('stats-total').innerText = snap.size;
                 document.getElementById('score-badge').innerText = correct;
-                const pct = snap.size > 0 ? Math.round((correct / snap.size) * 100) : 0;
-                document.getElementById('stats-progress-bar').style.width = pct + '%';
+                const pct = snap.size > 0 ? (correct / snap.size) * 100 : 0;
+                document.getElementById('progress-bar').style.width = pct + '%';
             });
         }
 
-        function renderTopics(topics) {
-            const list = document.getElementById('topics-list');
-            if (topics.length === 0) {
-                list.innerHTML = `
-                    <div class="bg-white p-8 rounded-3xl border border-dashed border-slate-300 text-center">
-                        <p class="text-slate-400 font-bold">Waiting for questions...</p>
-                        <p class="text-slate-400 text-xs">Sync with Teacher Bridge to begin.</p>
-                    </div>`;
+        function renderTopics(list) {
+            const container = document.getElementById('topics-list');
+            if (list.length === 0) {
+                container.innerHTML = `<div class="p-4 text-center text-slate-400 text-xs italic">No topics available yet. Check back soon.</div>`;
                 return;
             }
-            list.innerHTML = topics.map(topic => `
-                <button onclick="window.startQuiz('${topic}')" class="group w-full bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:border-blue-500 active:scale-[0.98] transition-all flex justify-between items-center text-left">
-                    <span class="font-black text-slate-800 text-lg">${topic}</span>
-                    <i data-lucide="chevron-right" class="w-5 h-5 text-slate-300 group-hover:text-blue-500 transition-colors"></i>
+            container.innerHTML = list.map(t => `
+                <button onclick="startQuiz('${t}')" class="w-full bg-white p-4 rounded-xl border border-slate-200 text-left hover:border-blue-500 transition-colors flex justify-between items-center group">
+                    <span class="font-bold text-slate-700">${t}</span>
+                    <i data-lucide="chevron-right" class="w-4 h-4 text-slate-300 group-hover:text-blue-500"></i>
                 </button>
             `).join('');
             lucide.createIcons();
         }
 
         window.startQuiz = async (topic) => {
-            if (!currentUser) return;
-            currentTopic = topic;
-            
-            const qPath = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
-            const snap = await getDocs(qPath);
-            currentQuestions = snap.docs
+            activeTopic = topic;
+            const qRef = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+            const snap = await getDocs(qRef);
+            questions = snap.docs
                 .map(d => ({ id: d.id, ...d.data() }))
                 .filter(q => {
                     const t = q.topic || q.topic_tags || "General";
                     return Array.isArray(t) ? t.includes(topic) : t === topic;
                 });
             
-            currentIndex = 0; sessionScore = 0;
+            if (questions.length === 0) return;
+            currentIdx = 0;
+            score = 0;
             showView('quiz');
-            renderQuestion();
+            displayQuestion();
         };
 
-        function renderQuestion() {
-            const q = currentQuestions[currentIndex];
-            document.getElementById('quiz-topic-title').innerText = currentTopic;
-            document.getElementById('quiz-question-text').innerText = q.text;
-            document.getElementById('quiz-options').innerHTML = q.options.map((opt, i) => `
-                <button onclick="window.handleAnswer(${i})" class="w-full p-5 rounded-2xl border-2 border-slate-100 bg-white font-bold hover:border-blue-500 text-left transition-all">
-                    <span class="inline-block w-8 h-8 bg-slate-100 rounded-lg text-center leading-8 mr-3 text-sm text-slate-400 font-black">${String.fromCharCode(65+i)}</span>
+        function displayQuestion() {
+            const q = questions[currentIdx];
+            document.getElementById('quiz-topic-label').innerText = activeTopic;
+            document.getElementById('question-text').innerText = q.text;
+            const container = document.getElementById('options-container');
+            container.innerHTML = q.options.map((opt, i) => `
+                <button onclick="submitAnswer(${i})" class="w-full p-4 bg-white border border-slate-200 rounded-xl text-left font-medium hover:bg-blue-50 hover:border-blue-200 active:scale-[0.99] transition-all">
                     ${opt}
                 </button>
             `).join('');
         }
 
-        window.handleAnswer = async (idx) => {
-            if (!currentUser) return;
-            const q = currentQuestions[currentIndex];
+        window.submitAnswer = async (idx) => {
+            const q = questions[currentIdx];
             const isCorrect = idx === q.correct_answer;
-            if (isCorrect) sessionScore++;
+            if (isCorrect) score++;
 
-            const btns = document.querySelectorAll('#quiz-options button');
-            btns.forEach(b => b.onclick = null); // Prevent double taps
-            
-            const btn = btns[idx];
-            btn.classList.add(isCorrect ? 'border-green-500' : 'border-red-500');
-            btn.classList.add(isCorrect ? 'bg-green-50' : 'bg-red-50');
+            // Disable buttons temporarily
+            document.querySelectorAll('#options-container button').forEach(b => b.disabled = true);
 
-            await addDoc(collection(db, 'artifacts', appId, 'users', currentUser.uid, 'attempts'), {
-                topic: currentTopic, isCorrect, timestamp: serverTimestamp()
-            }).catch(() => {});
+            // Record attempt
+            await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'attempts'), {
+                topic: activeTopic,
+                isCorrect: isCorrect,
+                timestamp: serverTimestamp()
+            }).catch(e => console.warn("Failed to save attempt", e));
 
             setTimeout(() => {
-                if (currentIndex + 1 < currentQuestions.length) {
-                    currentIndex++; renderQuestion();
+                if (currentIdx + 1 < questions.length) {
+                    currentIdx++;
+                    displayQuestion();
                 } else {
-                    showResults();
+                    document.getElementById('final-score').innerText = `${score} / ${questions.length}`;
+                    showView('results');
                 }
-            }, 800);
+            }, 500);
         };
 
-        function showResults() {
-            document.getElementById('result-score').innerText = `${sessionScore} / ${currentQuestions.length}`;
-            showView('results');
-        }
-
-        window.showLobby = () => showView('lobby');
-        function showView(v) {
-            ['lobby', 'quiz', 'results'].forEach(id => {
-                document.getElementById(`view-${id}`).classList.add('hidden');
-            });
-            document.getElementById(`view-${v}`).classList.remove('hidden');
-            lucide.createIcons();
-        }
-
-        document.getElementById('btn-google-login').onclick = () => {
-            signInWithRedirect(auth, new GoogleAuthProvider());
-        };
-
-        document.getElementById('btn-signout').onclick = () => {
-            signOut(auth).then(() => window.location.reload());
-        };
-
-        document.getElementById('btn-quit-quiz').onclick = () => showView('lobby');
-
-        // Execute
-        startAuth();
+        // Initialize icons
+        lucide.createIcons();
 
     </script>
 </body>
