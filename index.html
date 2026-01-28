@@ -18,47 +18,27 @@
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
         .google-btn {
-            background: white;
-            color: #374151;
-            border: 1px solid #e5e7eb;
-            transition: all 0.2s;
+            background: white; color: #374151; border: 1px solid #e5e7eb; transition: all 0.2s;
         }
         .google-btn:hover {
-            background: #f9fafb;
-            border-color: #d1d5db;
-            transform: translateY(-1px);
+            background: #f9fafb; border-color: #d1d5db; transform: translateY(-1px);
         }
+        .nav-active { color: #2563eb; border-bottom: 2px solid #2563eb; }
     </style>
 </head>
 <body class="bg-[#f8fafc]">
     <div id="root"></div>
 
-    <!-- Firebase SDK Setup -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { 
-            getAuth, 
-            signInWithPopup, 
-            signInWithRedirect, 
-            getRedirectResult,
-            GoogleAuthProvider, 
-            onAuthStateChanged, 
-            signOut, 
-            setPersistence, 
-            browserLocalPersistence 
+            getAuth, signInWithPopup, signInWithRedirect, getRedirectResult,
+            GoogleAuthProvider, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
-            getFirestore, 
-            collection, 
-            getDocs, 
-            addDoc, 
-            serverTimestamp, 
-            onSnapshot,
-            query,
-            where
+            getFirestore, collection, getDocs, addDoc, serverTimestamp, onSnapshot, query, where
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Firebase Config using provided credentials
         const firebaseConfig = {
             apiKey: "AIzaSyDSpaXWx2_qT88ffyTdmH43j63PUyJ82-4",
             authDomain: "ict-learning-platform.firebaseapp.com",
@@ -74,37 +54,12 @@
         const provider = new GoogleAuthProvider();
         provider.setCustomParameters({ prompt: 'select_account' });
 
-        // Ensure persistence is set to handle session loss
-        setPersistence(auth, browserLocalPersistence).catch(err => console.error("Persistence Error:", err));
+        setPersistence(auth, browserLocalPersistence).catch(err => console.error(err));
 
         window.FirebaseSDK = {
-            auth,
-            db,
-            login: async () => {
-                // Check if we are in a potentially restricted environment (iFrame or specific mobile browsers)
-                const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-                try {
-                    // Default to Popup for better reliability in iFrames/Partitioned storage
-                    // Redirect is often blocked or fails state checks in cross-origin environments
-                    return await signInWithPopup(auth, provider);
-                } catch (error) {
-                    console.warn("Popup blocked or failed, attempting redirect fallback:", error);
-                    if (error.code === 'auth/popup-blocked' || error.code === 'auth/cancelled-popup-request') {
-                        return signInWithRedirect(auth, provider);
-                    }
-                    throw error;
-                }
-            },
-            getRedirectResult: () => getRedirectResult(auth),
+            auth, db, login: () => signInWithPopup(auth, provider),
             logout: () => signOut(auth),
-            onAuthStateChanged,
-            collection,
-            getDocs,
-            addDoc,
-            serverTimestamp,
-            onSnapshot,
-            query,
-            where
+            onAuthStateChanged, collection, getDocs, addDoc, serverTimestamp, onSnapshot, query, where
         };
     </script>
 
@@ -112,15 +67,77 @@
         const { useState, useEffect, useRef } = React;
 
         const Icon = ({ name, className }) => {
-            useEffect(() => { 
-                if (window.lucide) window.lucide.createIcons(); 
-            }, [name]);
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} className={className}></i>;
+        };
+
+        // Standalone Leaderboard Module Merged from QA Sandbox
+        const LeaderboardView = ({ appId, currentUserId }) => {
+            const [data, setData] = useState([]);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                const sdk = window.FirebaseSDK;
+                const feedRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'activity_feed');
+                
+                const unsubscribe = sdk.onSnapshot(feedRef, (snap) => {
+                    const scores = {};
+                    snap.forEach(doc => {
+                        const d = doc.data();
+                        if (!scores[d.uid]) scores[d.uid] = { name: d.displayName, correct: 0, total: 0 };
+                        scores[d.uid].total++;
+                        if (d.isCorrect) scores[d.uid].correct++;
+                    });
+                    const sorted = Object.entries(scores)
+                        .map(([uid, stats]) => ({ uid, ...stats }))
+                        .sort((a, b) => b.correct - a.correct)
+                        .slice(0, 10);
+                    setData(sorted);
+                    setLoading(false);
+                }, (err) => console.error("Leaderboard error:", err));
+
+                return () => unsubscribe();
+            }, [appId]);
+
+            if (loading) return <div className="p-10 text-center animate-pulse text-slate-400 font-bold">Loading Rankings...</div>;
+
+            return (
+                <div className="space-y-4 fade-in">
+                    <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden">
+                        <div className="bg-slate-900 p-6 text-white flex justify-between items-center">
+                            <h2 className="text-xl font-black italic">TOP PERFORMERS</h2>
+                            <Icon name="trophy" className="w-5 h-5 text-yellow-400" />
+                        </div>
+                        <div className="divide-y divide-slate-50">
+                            {data.length === 0 ? (
+                                <div className="p-12 text-center text-slate-300 font-bold">No competition data yet.</div>
+                            ) : (
+                                data.map((entry, i) => (
+                                    <div key={entry.uid} className={`p-5 flex items-center justify-between transition-colors ${entry.uid === currentUserId ? 'bg-blue-50/50' : 'hover:bg-slate-50'}`}>
+                                        <div className="flex items-center gap-4">
+                                            <span className={`w-8 font-black text-lg ${i < 3 ? 'text-blue-600' : 'text-slate-300'}`}>{i + 1}</span>
+                                            <span className={`font-bold ${entry.uid === currentUserId ? 'text-blue-700' : 'text-slate-700'}`}>
+                                                {entry.name} {entry.uid === currentUserId && '(You)'}
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-4">
+                                            <div className="hidden sm:block text-[10px] text-slate-400 font-bold uppercase">{entry.total} Attempts</div>
+                                            <div className="font-black text-blue-600 bg-blue-100 px-3 py-1 rounded-lg text-sm border border-blue-100">
+                                                {entry.correct} pts
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
         };
 
         function App() {
             const [user, setUser] = useState(null);
-            const [view, setView] = useState('lobby'); 
+            const [view, setView] = useState('lobby'); // lobby, quiz, results, leaderboard
             const [topics, setTopics] = useState([]);
             const [currentTopic, setCurrentTopic] = useState(null);
             const [questions, setQuestions] = useState([]);
@@ -133,69 +150,35 @@
             const [showDebug, setShowDebug] = useState(false);
             const [authError, setAuthError] = useState(null);
             
-            // Allow dynamic AppID switching for testing
             const [appId, setAppId] = useState(localStorage.getItem('ict_app_id') || "default-app-id");
-            
             const authChecked = useRef(false);
 
             useEffect(() => {
-                const checkSDK = setInterval(() => {
-                    if (window.FirebaseSDK) {
-                        setSdkReady(true);
-                        clearInterval(checkSDK);
-                    }
-                }, 100);
+                const checkSDK = setInterval(() => { if (window.FirebaseSDK) { setSdkReady(true); clearInterval(checkSDK); } }, 100);
                 return () => clearInterval(checkSDK);
             }, []);
 
             useEffect(() => {
                 if (!sdkReady) return;
                 const sdk = window.FirebaseSDK;
-                
-                // Handle the result of a redirect login if it happened
-                sdk.getRedirectResult()
-                    .then((result) => {
-                        if (result?.user) setUser(result.user);
-                    })
-                    .catch((error) => {
-                        console.error("Auth Redirect Error:", error);
-                        if (error.code === 'auth/auth-domain-config-required' || error.code === 'auth/operation-not-supported-in-this-environment') {
-                            setAuthError("This browser environment restricts login redirects. Please try again or use a different browser.");
-                        }
-                    });
-
-                const unsubAuth = sdk.onAuthStateChanged(sdk.auth, (u) => {
-                    authChecked.current = true;
-                    setUser(u);
-                    setLoading(false);
-                });
-                return () => unsubAuth();
+                const unsub = sdk.onAuthStateChanged(sdk.auth, (u) => { authChecked.current = true; setUser(u); setLoading(false); });
+                return () => unsub();
             }, [sdkReady]);
 
             useEffect(() => {
                 if (!user || !sdkReady) return;
                 const sdk = window.FirebaseSDK;
 
-                // Watch for questions to extract topics
                 const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
                 const unsubTopics = sdk.onSnapshot(qRef, (snap) => {
                     const tags = new Set();
-                    if (snap.empty) {
-                        setTopics([]);
-                    } else {
-                        snap.forEach(doc => {
-                            const data = doc.data();
-                            const t = data.topic_tags || ["General"];
-                            (Array.isArray(t) ? t : [t]).forEach(tag => tags.add(tag));
-                        });
-                        setTopics(Array.from(tags).sort());
-                    }
-                }, (err) => {
-                    console.error("Firestore Read Error:", err);
-                    setTopics([]);
+                    snap.forEach(doc => {
+                        const t = doc.data().topic_tags || ["General"];
+                        (Array.isArray(t) ? t : [t]).forEach(tag => tags.add(tag));
+                    });
+                    setTopics(Array.from(tags).sort());
                 });
 
-                // Watch private stats
                 const statsRef = sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts');
                 const unsubStats = sdk.onSnapshot(statsRef, (snap) => {
                     let correct = 0;
@@ -206,37 +189,10 @@
                 return () => { unsubTopics(); unsubStats(); };
             }, [user, sdkReady, appId]);
 
-            const updateAppId = (newId) => {
-                setAppId(newId);
-                localStorage.setItem('ict_app_id', newId);
-            };
-
-            const seedQuestions = async () => {
-                const sdk = window.FirebaseSDK;
-                const samples = [
-                    { text: "What does CPU stand for?", options: ["Central Process Unit", "Central Processing Unit", "Computer Personal Unit", "Control Process Unit"], correct_answer: 1, topic_tags: ["Computer Systems"] },
-                    { text: "Which protocol is used for secure web browsing?", options: ["FTP", "HTTP", "HTTPS", "SMTP"], correct_answer: 2, topic_tags: ["Networking"] },
-                    { text: "What is 1011 in Decimal?", options: ["9", "10", "11", "12"], correct_answer: 2, topic_tags: ["Data Representation"] }
-                ];
-                
-                try {
-                    const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
-                    for (const q of samples) {
-                        await sdk.addDoc(qRef, q);
-                    }
-                    alert("Sample questions added!");
-                } catch (e) {
-                    alert("Error seeding: " + e.message);
-                }
-            };
+            const updateAppId = (id) => { setAppId(id); localStorage.setItem('ict_app_id', id); };
 
             const handleLogin = async () => {
-                setAuthError(null);
-                try {
-                    await window.FirebaseSDK.login();
-                } catch (err) {
-                    setAuthError(err.message);
-                }
+                try { await window.FirebaseSDK.login(); } catch (err) { setAuthError(err.message); }
             };
 
             const startQuiz = async (topic) => {
@@ -245,21 +201,11 @@
                 try {
                     const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
                     const snap = await sdk.getDocs(qRef);
-                    const filtered = snap.docs
-                        .map(doc => ({ id: doc.id, ...doc.data() }))
+                    const filtered = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
                         .filter(q => (q.topic_tags || []).includes(topic));
                     
-                    if (filtered.length === 0) {
-                        alert("No questions found for this topic.");
-                        setLoading(false);
-                        return;
-                    }
-
-                    setQuestions(filtered);
-                    setCurrentTopic(topic);
-                    setCurrentIndex(0);
-                    setSessionScore(0);
-                    setView('quiz');
+                    if (filtered.length === 0) { alert("No questions found."); setLoading(false); return; }
+                    setQuestions(filtered); setCurrentTopic(topic); setCurrentIndex(0); setSessionScore(0); setView('quiz');
                 } catch (e) { console.error(e); }
                 setLoading(false);
             };
@@ -267,141 +213,87 @@
             const handleAnswer = async (index) => {
                 const sdk = window.FirebaseSDK;
                 if (feedback || !user) return;
-                
                 const q = questions[currentIndex];
                 const isCorrect = index === q.correct_answer;
                 if (isCorrect) setSessionScore(s => s + 1);
                 setFeedback(isCorrect ? 'correct' : 'wrong');
 
-                try {
-                    const eventData = {
-                        uid: user.uid,
-                        displayName: user.displayName || "Student",
-                        topic: currentTopic,
-                        isCorrect,
-                        timestamp: sdk.serverTimestamp()
-                    };
-                    await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts'), eventData);
-                    await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'activity_feed'), eventData);
-                } catch (e) { console.error("Sync Error:", e); }
+                const eventData = {
+                    uid: user.uid, displayName: user.displayName || "Student",
+                    topic: currentTopic, isCorrect, timestamp: sdk.serverTimestamp()
+                };
+                await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts'), eventData);
+                await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'activity_feed'), eventData);
 
                 setTimeout(() => {
-                    if (currentIndex + 1 < questions.length) {
-                        setCurrentIndex(i => i + 1);
-                        setFeedback(null);
-                    } else {
-                        setView('results');
-                        setFeedback(null);
-                    }
+                    if (currentIndex + 1 < questions.length) { setCurrentIndex(i => i + 1); setFeedback(null); }
+                    else { setView('results'); setFeedback(null); }
                 }, 1000);
             };
 
-            if (!sdkReady || loading || !authChecked.current) return (
-                <div className="h-screen flex items-center justify-center bg-slate-50 text-slate-400 font-bold text-xs uppercase tracking-widest">
-                    Initializing Mastery Portal...
-                </div>
-            );
+            if (!sdkReady || loading || !authChecked.current) return <div className="h-screen flex items-center justify-center bg-slate-50 text-slate-400 font-bold text-xs uppercase tracking-widest">Loading...</div>;
 
             if (!user) return (
                 <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
                     <div className="max-w-md w-full text-center space-y-8 fade-in">
-                        <div className="w-20 h-20 bg-blue-600 rounded-3xl mx-auto flex items-center justify-center text-white shadow-2xl">
-                            <Icon name="shield-check" className="w-10 h-10" />
-                        </div>
+                        <div className="w-20 h-20 bg-blue-600 rounded-3xl mx-auto flex items-center justify-center text-white shadow-2xl"><Icon name="shield-check" className="w-10 h-10" /></div>
                         <h1 className="text-3xl font-black text-slate-800 italic">ICT MASTERY</h1>
-                        
-                        {authError && (
-                            <div className="bg-red-50 border border-red-100 p-4 rounded-xl text-red-600 text-sm font-semibold">
-                                {authError}
-                            </div>
-                        )}
-
                         <button onClick={handleLogin} className="google-btn w-full py-4 px-6 rounded-2xl flex items-center justify-center gap-3 font-bold shadow-sm">
-                            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" />
-                            Student Login
+                            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" /> Student Login
                         </button>
-                        
-                        <p className="text-slate-400 text-xs px-4">
-                            If login fails, ensure third-party cookies are enabled or try opening the portal in a new tab.
-                        </p>
                     </div>
                 </div>
             );
 
             return (
-                <div className="min-h-screen">
+                <div className="min-h-screen pb-20">
                     <header className="bg-white/80 backdrop-blur-md border-b sticky top-0 z-50 px-6 py-4 flex justify-between items-center">
-                        <div className="flex items-center gap-2 font-extrabold text-slate-800 tracking-tight">
-                            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
-                                <Icon name="book-open" className="w-4 h-4" />
-                            </div>
+                        <div className="flex items-center gap-2 font-extrabold text-slate-800 tracking-tight cursor-pointer" onClick={() => setView('lobby')}>
+                            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white"><Icon name="book-open" className="w-4 h-4" /></div>
                             ICT MASTERY
                         </div>
                         <div className="flex items-center gap-3">
-                            <button onClick={() => setShowDebug(!showDebug)} className="p-2 text-slate-300 hover:text-slate-500">
-                                <Icon name="settings" className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => window.FirebaseSDK.logout()} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
-                                <Icon name="log-out" className="w-5 h-5" />
-                            </button>
+                            <button onClick={() => setShowDebug(!showDebug)} className="p-2 text-slate-300"><Icon name="settings" className="w-4 h-4" /></button>
                             <div className="bg-blue-50 border border-blue-100 px-3 py-1.5 rounded-2xl flex items-center gap-2 text-sm font-black text-blue-700">
-                                <Icon name="trophy" className="w-4 h-4" />
-                                {userStats.correct}
+                                <Icon name="trophy" className="w-4 h-4" /> {userStats.correct}
                             </div>
+                            <button onClick={() => window.FirebaseSDK.logout()} className="p-2 text-slate-400"><Icon name="log-out" className="w-5 h-5" /></button>
                         </div>
                     </header>
 
                     {showDebug && (
-                        <div className="bg-yellow-50 border-b border-yellow-100 p-6 text-[11px] font-mono space-y-3">
-                            <div className="flex flex-col gap-1">
-                                <label className="font-bold text-yellow-800">Firestore App ID Path:</label>
-                                <input 
-                                    type="text" 
-                                    value={appId} 
-                                    onChange={(e) => updateAppId(e.target.value)}
-                                    className="bg-white border border-yellow-200 p-2 rounded w-full text-blue-600 font-bold"
-                                />
-                            </div>
-                            <div className="flex gap-2">
-                                <button onClick={seedQuestions} className="bg-yellow-600 text-white px-3 py-1.5 rounded font-bold uppercase tracking-wider">Add Sample Data</button>
-                                <button onClick={() => setShowDebug(false)} className="bg-slate-200 text-slate-600 px-3 py-1.5 rounded font-bold uppercase tracking-wider">Close</button>
-                            </div>
+                        <div className="bg-yellow-50 border-b p-6 text-[11px] font-mono">
+                            <input type="text" value={appId} onChange={(e) => updateAppId(e.target.value)} className="bg-white border p-2 rounded w-full" />
                         </div>
                     )}
 
                     <main className="max-w-xl mx-auto p-4 pt-8">
+                        {/* Unified Tab Navigation */}
+                        {(view === 'lobby' || view === 'leaderboard') && (
+                            <div className="flex gap-6 border-b mb-8 font-bold text-sm text-slate-400">
+                                <button onClick={() => setView('lobby')} className={`pb-2 px-2 transition-colors ${view === 'lobby' ? 'nav-active' : 'hover:text-slate-600'}`}>Practice</button>
+                                <button onClick={() => setView('leaderboard')} className={`pb-2 px-2 transition-colors ${view === 'leaderboard' ? 'nav-active' : 'hover:text-slate-600'}`}>Leaderboard</button>
+                            </div>
+                        )}
+
                         {view === 'lobby' && (
                             <div className="space-y-8 fade-in">
-                                <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-xl shadow-slate-200/50">
-                                    <div className="flex items-center gap-3 mb-6">
-                                        {user.photoURL && <img src={user.photoURL} className="w-10 h-10 rounded-full border-2 border-white" />}
-                                        <div className="overflow-hidden">
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">Student Portal</p>
-                                            <p className="font-black text-slate-800 truncate">{user.displayName || 'Student'}</p>
-                                        </div>
-                                    </div>
-                                    <h2 className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-2 text-center">Mastery Index</h2>
-                                    <div className="text-5xl font-black text-slate-900 mb-6 text-center">
-                                        {userStats.total > 0 ? Math.round((userStats.correct/userStats.total)*100) : 0}%
-                                    </div>
-                                    <div className="w-full bg-slate-100 h-4 rounded-full overflow-hidden">
-                                        <div className="bg-gradient-to-r from-blue-600 to-indigo-500 h-full transition-all duration-1000" style={{width: `${userStats.total > 0 ? (userStats.correct/userStats.total)*100 : 0}%`}}></div>
+                                <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-xl text-center">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">My Rank Progress</p>
+                                    <div className="text-5xl font-black text-slate-900 mb-6">{userStats.total > 0 ? Math.round((userStats.correct/userStats.total)*100) : 0}%</div>
+                                    <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+                                        <div className="bg-blue-600 h-full transition-all duration-1000" style={{width: `${userStats.total > 0 ? (userStats.correct/userStats.total)*100 : 0}%`}}></div>
                                     </div>
                                 </div>
-
                                 <div className="grid gap-3">
                                     <h3 className="font-extrabold text-slate-800 text-lg px-2">Domains</h3>
                                     {topics.length === 0 ? (
-                                        <div className="bg-white p-10 rounded-[1.5rem] border border-dashed border-slate-200 text-center text-slate-400">
-                                            <Icon name="search" className="w-8 h-8 mx-auto mb-3 opacity-20" />
-                                            <p className="font-bold">No questions found</p>
-                                            <button onClick={() => setShowDebug(true)} className="mt-4 text-blue-600 text-[10px] font-black uppercase tracking-widest hover:underline">Adjust App ID Settings</button>
-                                        </div>
+                                        <div className="p-10 text-center border-2 border-dashed rounded-3xl text-slate-300 font-bold">Waiting for content...</div>
                                     ) : (
                                         topics.map(t => (
-                                            <button key={t} onClick={() => startQuiz(t)} className="w-full bg-white p-6 rounded-[1.5rem] border border-slate-100 shadow-sm flex justify-between items-center hover:border-blue-400 hover:shadow-lg transition-all active:scale-95">
-                                                <span className="font-bold text-slate-700 text-lg">{t}</span>
-                                                <Icon name="arrow-right" className="w-5 h-5 text-slate-200" />
+                                            <button key={t} onClick={() => startQuiz(t)} className="w-full bg-white p-6 rounded-[1.5rem] border border-slate-100 shadow-sm flex justify-between items-center hover:border-blue-400 transition-all group">
+                                                <span className="font-bold text-slate-700 text-lg group-hover:text-blue-600">{t}</span>
+                                                <Icon name="play" className="w-4 h-4 text-blue-500" />
                                             </button>
                                         ))
                                     )}
@@ -409,21 +301,23 @@
                             </div>
                         )}
 
+                        {view === 'leaderboard' && <LeaderboardView appId={appId} currentUserId={user.uid} />}
+
                         {view === 'quiz' && (
                             <div className="space-y-6 fade-in">
                                 <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                    <button onClick={() => setView('lobby')} className="hover:text-red-500 transition-colors">✕ Terminate</button>
+                                    <button onClick={() => setView('lobby')} className="hover:text-slate-800 transition-colors">✕ Terminate</button>
                                     <div className="bg-slate-900 text-white px-3 py-1 rounded-full">{currentIndex + 1} / {questions.length}</div>
                                 </div>
-                                <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-xl min-h-[200px] flex items-center justify-center text-center">
-                                    <h2 className="text-xl font-black text-slate-800">{questions[currentIndex].text}</h2>
+                                <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-xl text-center">
+                                    <h2 className="text-xl font-black text-slate-800 leading-tight">{questions[currentIndex].text}</h2>
                                 </div>
                                 <div className="grid gap-3">
                                     {questions[currentIndex].options.map((opt, i) => (
                                         <button key={i} disabled={!!feedback} onClick={() => handleAnswer(i)}
                                             className={`w-full p-6 rounded-[1.5rem] text-left font-bold border-2 transition-all flex items-center gap-4
-                                            ${!feedback ? 'bg-white border-slate-50 shadow-sm hover:border-blue-400' : ''}
-                                            ${feedback === 'correct' && i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700 shadow-lg shadow-green-100' : ''}
+                                            ${!feedback ? 'bg-white border-slate-50 hover:border-blue-400' : ''}
+                                            ${feedback === 'correct' && i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : ''}
                                             ${feedback === 'wrong' && i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : ''}
                                             ${feedback === 'wrong' && i !== questions[currentIndex].correct_answer ? 'opacity-40 scale-95' : ''}`}>
                                             <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black ${feedback === 'correct' && i === questions[currentIndex].correct_answer ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
@@ -438,16 +332,12 @@
 
                         {view === 'results' && (
                             <div className="text-center space-y-8 fade-in py-10">
-                                <div className="w-24 h-24 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-2xl mx-auto">
-                                    <Icon name="check-circle" className="w-12 h-12" />
-                                </div>
-                                <h2 className="text-3xl font-black text-slate-900 tracking-tighter">Session Complete</h2>
+                                <div className="w-24 h-24 bg-blue-600 rounded-full flex items-center justify-center text-white mx-auto shadow-2xl"><Icon name="check-circle" className="w-12 h-12" /></div>
+                                <h2 className="text-3xl font-black text-slate-900">Session Complete</h2>
                                 <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-xl inline-block px-16">
                                     <div className="text-6xl font-black text-blue-600">{sessionScore} / {questions.length}</div>
                                 </div>
-                                <button onClick={() => setView('lobby')} className="block w-full bg-slate-900 text-white p-5 rounded-[1.5rem] font-black text-lg shadow-xl hover:bg-blue-700 transition-all">
-                                    RETURN TO DASHBOARD
-                                </button>
+                                <button onClick={() => setView('lobby')} className="block w-full bg-slate-900 text-white p-5 rounded-[1.5rem] font-black hover:bg-blue-700 shadow-lg transition-all">CONTINUE</button>
                             </div>
                         )}
                     </main>
