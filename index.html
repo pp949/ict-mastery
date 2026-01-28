@@ -66,7 +66,7 @@
 
     <!-- Main App Logic -->
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
         const Icon = ({ name, className }) => {
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name, className]);
@@ -84,6 +84,7 @@
             const [feedback, setFeedback] = useState(null);
             const [sessionScore, setSessionScore] = useState(0);
             const [userStats, setUserStats] = useState({ total: 0, correct: 0 });
+            const [topicStats, setTopicStats] = useState({});
             
             const appId = "default-app-id";
 
@@ -132,12 +133,39 @@
                 const statsRef = methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
                 const unsubStats = methods.onSnapshot(statsRef, (snap) => {
                     let correct = 0;
-                    snap.forEach(d => { if (d.data().isCorrect) correct++; });
+                    const stats = {};
+                    snap.forEach(d => { 
+                        const data = d.data();
+                        if (data.isCorrect) correct++;
+                        
+                        const t = data.topic || "General";
+                        if (!stats[t]) stats[t] = { correct: 0, total: 0, lastTry: 0 };
+                        stats[t].total++;
+                        if (data.isCorrect) stats[t].correct++;
+                        const ts = data.timestamp?.toDate().getTime() || 0;
+                        if (ts > stats[t].lastTry) stats[t].lastTry = ts;
+                    });
                     setUserStats({ total: snap.size, correct });
+                    setTopicStats(stats);
                 });
 
                 return () => { unsubTopics(); unsubStats(); };
             }, [user]);
+
+            // Calculated Performance Tags
+            const performanceSets = useMemo(() => {
+                const results = topics.map(t => {
+                    const s = topicStats[t] || { correct: 0, total: 0, lastTry: 0 };
+                    const rate = s.total > 0 ? (s.correct / s.total) : -1; // -1 for untried
+                    return { name: t, rate, ...s };
+                });
+
+                const tried = results.filter(r => r.total > 0);
+                const best = [...tried].sort((a, b) => b.rate - a.rate).slice(0, 3);
+                const worst = [...tried].sort((a, b) => a.rate - b.rate).slice(0, 3);
+                
+                return { best, worst };
+            }, [topics, topicStats]);
 
             const handleGoogleSignIn = async () => {
                 const { auth, providers, methods } = window.FB;
@@ -145,7 +173,7 @@
                 await methods.signInWithRedirect(auth, provider);
             };
 
-            const startQuiz = async (topic) => {
+            const startQuiz = async (topic, limit = 1) => {
                 const { db, methods } = window.FB;
                 const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
                 const snapshot = await methods.getDocs(qRef);
@@ -157,8 +185,52 @@
                     });
                 
                 if (filtered.length === 0) return;
-                setQuestions(filtered.sort(() => Math.random() - 0.5).slice(0, 10));
+                setQuestions(filtered.sort(() => Math.random() - 0.5).slice(0, limit));
                 setCurrentTopic(topic);
+                setCurrentIndex(0);
+                setSessionScore(0);
+                setView('quiz');
+            };
+
+            const startChallenge = async () => {
+                const { db, methods } = window.FB;
+                const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+                const snapshot = await methods.getDocs(qRef);
+                const allQs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+                // 1. Worst topics (2 questions)
+                const worstTopics = performanceSets.worst.map(t => t.name);
+                const worstPool = allQs.filter(q => {
+                    const t = q.topic_tags || q.topic || q.tags || "General";
+                    return Array.isArray(t) ? t.some(tag => worstTopics.includes(tag)) : worstTopics.includes(t);
+                });
+
+                // 2. Longest time ago (1 question)
+                const sortedByTime = topics.map(t => ({
+                    name: t,
+                    lastTry: topicStats[t]?.lastTry || 0
+                })).sort((a, b) => a.lastTry - b.lastTry);
+                const oldestTopic = sortedByTime[0]?.name;
+                const oldestPool = allQs.filter(q => {
+                    const t = q.topic_tags || q.topic || q.tags || "General";
+                    return Array.isArray(t) ? t.includes(oldestTopic) : t === oldestTopic;
+                });
+
+                // Selection
+                const finalSet = [
+                    ...worstPool.sort(() => Math.random() - 0.5).slice(0, 2),
+                    ...oldestPool.sort(() => Math.random() - 0.5).slice(0, 1),
+                    ...allQs.sort(() => Math.random() - 0.5).slice(0, 2) // 2 from other/random
+                ];
+
+                if (finalSet.length < 5) {
+                   // Fallback to random if pools are too small
+                   const more = allQs.sort(() => Math.random() - 0.5).slice(0, 5 - finalSet.length);
+                   finalSet.push(...more);
+                }
+
+                setQuestions(finalSet.slice(0, 5));
+                setCurrentTopic("Mixed Challenge");
                 setCurrentIndex(0);
                 setSessionScore(0);
                 setView('quiz');
@@ -177,13 +249,14 @@
                 await methods.addDoc(methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts'), {
                     question_id: q.id,
                     isCorrect: correct,
-                    topic: currentTopic,
+                    topic: currentTopic === "Mixed Challenge" ? (Array.isArray(q.topic_tags) ? q.topic_tags[0] : q.topic) : currentTopic,
                     timestamp: methods.serverTimestamp()
                 });
 
                 // Record for teacher activity feed
                 await methods.addDoc(methods.collection(db, 'artifacts', appId, 'public', 'data', 'activity_feed'), {
                     uid: user.uid,
+                    displayName: user?.displayName || "Guest",
                     topic: currentTopic,
                     isCorrect: correct,
                     timestamp: methods.serverTimestamp()
@@ -260,22 +333,80 @@
                                     <Icon name="activity" className="absolute -right-4 -bottom-4 w-24 h-24 text-blue-50 opacity-20" />
                                 </div>
 
-                                <div className="space-y-3">
-                                    <h3 className="font-black text-slate-800 text-lg flex items-center gap-2 px-2">
-                                        <Icon name="book-open" className="w-5 h-5 text-blue-500" />
-                                        STUDY TOPICS
-                                    </h3>
-                                    <div className="grid gap-3">
-                                        {topics.length > 0 ? topics.map(t => (
-                                            <button key={t} onClick={() => startQuiz(t)} className="bg-white p-5 rounded-2xl border border-slate-200 text-left font-bold flex justify-between items-center hover:border-blue-500 hover:shadow-md transition-all active:scale-[0.98] group">
-                                                <span className="text-slate-700">{t}</span>
-                                                <Icon name="arrow-right" className="text-slate-300 group-hover:text-blue-500 transition-colors" />
-                                            </button>
-                                        )) : (
-                                            <div className="text-center py-12 bg-white rounded-3xl border border-dashed border-slate-300">
-                                                <p className="text-slate-400 font-medium">Waiting for question bank...</p>
+                                {/* Performance Insight */}
+                                {performanceSets.best.length > 0 && (
+                                    <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm space-y-4">
+                                        <div>
+                                            <h4 className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-2 flex items-center gap-1">
+                                                <Icon name="trending-up" className="w-3 h-3"/> Strengths
+                                            </h4>
+                                            <div className="flex flex-wrap gap-2">
+                                                {performanceSets.best.map(t => (
+                                                    <span key={t.name} className="px-2 py-1 bg-green-50 text-green-700 text-[10px] font-bold rounded-lg border border-green-100">
+                                                        {t.name} ({Math.round(t.rate*100)}%)
+                                                    </span>
+                                                ))}
                                             </div>
-                                        )}
+                                        </div>
+                                        <div>
+                                            <h4 className="text-[10px] font-black text-red-600 uppercase tracking-widest mb-2 flex items-center gap-1">
+                                                <Icon name="trending-down" className="w-3 h-3"/> Improvement Areas
+                                            </h4>
+                                            <div className="flex flex-wrap gap-2">
+                                                {performanceSets.worst.map(t => (
+                                                    <span key={t.name} className="px-2 py-1 bg-red-50 text-red-700 text-[10px] font-bold rounded-lg border border-red-100">
+                                                        {t.name} ({Math.round(t.rate*100)}%)
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="space-y-4">
+                                    <button 
+                                        onClick={startChallenge}
+                                        className="w-full bg-slate-900 text-white p-5 rounded-[2rem] font-black flex items-center justify-between group overflow-hidden relative shadow-xl active:scale-95 transition-all"
+                                    >
+                                        <div className="relative z-10 flex items-center gap-3">
+                                            <div className="bg-white/10 p-2 rounded-xl">
+                                                <Icon name="zap" className="w-5 h-5 text-yellow-400" />
+                                            </div>
+                                            <div className="text-left">
+                                                <p className="text-sm">DAILY CHALLENGE</p>
+                                                <p className="text-[10px] text-slate-400 font-bold uppercase">5 Questions • Mix Difficulty</p>
+                                            </div>
+                                        </div>
+                                        <Icon name="play" className="relative z-10 w-5 h-5 text-white group-hover:translate-x-1 transition-transform" />
+                                        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600 rounded-full blur-3xl opacity-20 -mr-10 -mt-10"></div>
+                                    </button>
+
+                                    <div className="space-y-3">
+                                        <h3 className="font-black text-slate-800 text-lg flex items-center gap-2 px-2">
+                                            <Icon name="book-open" className="w-5 h-5 text-blue-500" />
+                                            QUICK PRACTICE
+                                        </h3>
+                                        <div className="grid gap-2">
+                                            {topics.length > 0 ? topics.map(t => (
+                                                <button 
+                                                    key={t} 
+                                                    onClick={() => startQuiz(t, 1)} 
+                                                    className="bg-white px-4 py-3 rounded-2xl border border-slate-200 text-left font-bold flex justify-between items-center hover:border-blue-500 hover:shadow-md transition-all active:scale-[0.98] group"
+                                                >
+                                                    <span className="text-slate-700 text-sm">{t}</span>
+                                                    <div className="flex items-center gap-3">
+                                                        {topicStats[t]?.total > 0 && (
+                                                            <span className="text-[10px] text-slate-400">{topicStats[t].correct}/{topicStats[t].total}</span>
+                                                        )}
+                                                        <Icon name="zap" className="w-4 h-4 text-slate-200 group-hover:text-blue-500 transition-colors" />
+                                                    </div>
+                                                </button>
+                                            )) : (
+                                                <div className="text-center py-12 bg-white rounded-3xl border border-dashed border-slate-300">
+                                                    <p className="text-slate-400 font-medium">Waiting for question bank...</p>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -284,7 +415,7 @@
                         {view === 'quiz' && (
                             <div className="space-y-6 animate-in">
                                 <div className="flex justify-between items-center px-2">
-                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{currentTopic}</span>
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate max-w-[200px]">{currentTopic}</span>
                                     <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Q{currentIndex + 1} / {questions.length}</span>
                                 </div>
                                 <div className="bg-white p-8 rounded-[2.5rem] border-2 border-slate-100 shadow-sm min-h-[200px] flex items-center justify-center text-center">
