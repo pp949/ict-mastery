@@ -66,9 +66,6 @@
             serverTimestamp,
             onSnapshot
         };
-
-        // Notify the app that Firebase is ready
-        window.dispatchEvent(new CustomEvent('firebase-initialized'));
     </script>
 
     <script type="text/babel">
@@ -93,18 +90,22 @@
             const [sessionScore, setSessionScore] = useState(0);
             const [userStats, setUserStats] = useState({ total: 0, correct: 0 });
             const [loading, setLoading] = useState(true);
-            const [isInitialized, setIsInitialized] = useState(!!window.FirebaseSDK);
+            const [sdkReady, setSdkReady] = useState(false);
 
-            // Handle SDK Readiness
+            // Robust polling for Firebase SDK availability
             useEffect(() => {
-                const initListener = () => setIsInitialized(true);
-                window.addEventListener('firebase-initialized', initListener);
-                return () => window.removeEventListener('firebase-initialized', initListener);
+                const checkSDK = setInterval(() => {
+                    if (window.FirebaseSDK) {
+                        setSdkReady(true);
+                        clearInterval(checkSDK);
+                    }
+                }, 100);
+                return () => clearInterval(checkSDK);
             }, []);
 
             // Handle Auth State
             useEffect(() => {
-                if (!isInitialized) return;
+                if (!sdkReady) return;
                 const sdk = window.FirebaseSDK;
                 
                 sdk.getRedirectResult().catch(err => console.error("Auth Redirect Error:", err));
@@ -114,11 +115,11 @@
                     setLoading(false);
                 });
                 return () => unsubAuth();
-            }, [isInitialized]);
+            }, [sdkReady]);
 
             // Load Data
             useEffect(() => {
-                if (!user || !isInitialized) return;
+                if (!user || !sdkReady) return;
                 const sdk = window.FirebaseSDK;
 
                 const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
@@ -129,17 +130,17 @@
                         (Array.isArray(t) ? t : [t]).forEach(tag => tags.add(tag));
                     });
                     setTopics(Array.from(tags).sort());
-                });
+                }, (err) => console.error("Firestore Topics Error:", err));
 
                 const statsRef = sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts');
                 const unsubStats = sdk.onSnapshot(statsRef, (snap) => {
                     let correct = 0;
                     snap.forEach(doc => { if (doc.data().isCorrect) correct++; });
                     setUserStats({ total: snap.size, correct });
-                });
+                }, (err) => console.error("Firestore Stats Error:", err));
 
                 return () => { unsubTopics(); unsubStats(); };
-            }, [user, isInitialized]);
+            }, [user, sdkReady]);
 
             const startQuiz = async (topic) => {
                 const sdk = window.FirebaseSDK;
@@ -188,7 +189,7 @@
                 }, 1000);
             };
 
-            if (!isInitialized || loading) return (
+            if (!sdkReady || loading) return (
                 <div className="h-screen flex items-center justify-center bg-slate-50">
                     <div className="text-center space-y-4">
                         <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto"></div>
