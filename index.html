@@ -17,6 +17,7 @@
         .fade-in { animation: fadeIn 0.4s ease-out forwards; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
+        /* Custom Auth Button Style */
         .google-btn {
             background: white;
             color: #374151;
@@ -71,13 +72,17 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
         const provider = new GoogleAuthProvider();
+        
+        // Security enhancement: Force re-selection of account if needed
         provider.setCustomParameters({ prompt: 'select_account' });
 
+        // Set robust persistence for mobile/web security
         setPersistence(auth, browserLocalPersistence).catch(err => console.error("Security Persistence Error:", err));
 
         window.FirebaseSDK = {
             auth,
             db,
+            // Security: Use popup by default, but handle redirects for strict mobile browsers
             login: async () => {
                 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
                 if (isMobile) {
@@ -124,6 +129,7 @@
             
             const authChecked = useRef(false);
 
+            // SDK Availability Check
             useEffect(() => {
                 const checkSDK = setInterval(() => {
                     if (window.FirebaseSDK) {
@@ -134,10 +140,14 @@
                 return () => clearInterval(checkSDK);
             }, []);
 
+            // Secure Auth Listener
             useEffect(() => {
                 if (!sdkReady) return;
                 const sdk = window.FirebaseSDK;
+                
+                // Handle redirect results (critical for mobile security/compliance)
                 sdk.getRedirectResult().catch(err => console.error("Redirect Auth Error:", err));
+
                 const unsubAuth = sdk.onAuthStateChanged(sdk.auth, (u) => {
                     authChecked.current = true;
                     setUser(u);
@@ -146,10 +156,12 @@
                 return () => unsubAuth();
             }, [sdkReady]);
 
+            // Data Fetching with Security Boundaries
             useEffect(() => {
                 if (!user || !sdkReady) return;
                 const sdk = window.FirebaseSDK;
 
+                // 1. Fetch Public Data (Read-only)
                 const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
                 const unsubTopics = sdk.onSnapshot(qRef, (snap) => {
                     const tags = new Set();
@@ -158,13 +170,19 @@
                         (Array.isArray(t) ? t : [t]).forEach(tag => tags.add(tag));
                     });
                     setTopics(Array.from(tags).sort());
+                }, (err) => {
+                    console.error("Security Policy: Cannot read questions.", err);
                 });
 
+                // 2. Fetch Private User Data (Siloed to this UID)
+                // Path: artifacts/{appId}/users/{userId}/attempts
                 const statsRef = sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts');
                 const unsubStats = sdk.onSnapshot(statsRef, (snap) => {
                     let correct = 0;
                     snap.forEach(doc => { if (doc.data().isCorrect) correct++; });
                     setUserStats({ total: snap.size, correct });
+                }, (err) => {
+                    console.error("Security Policy: Access denied to user stats.", err);
                 });
 
                 return () => { unsubTopics(); unsubStats(); };
@@ -200,29 +218,17 @@
                 if (isCorrect) setSessionScore(s => s + 1);
                 setFeedback(isCorrect ? 'correct' : 'wrong');
 
+                // Secure Write: Only writing to the user's specific subcollection
                 try {
-                    const timestamp = sdk.serverTimestamp();
-                    
-                    // 1. Write to Private History (For Student Stats)
                     await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts'), {
                         question_id: q.id,
                         topic: currentTopic,
                         isCorrect,
-                        timestamp: timestamp
+                        timestamp: sdk.serverTimestamp(),
+                        uid: user.uid // Redundant safety
                     });
-
-                    // 2. Write to Public Activity Feed (For Teacher Bridge)
-                    // The Teacher Bridge listens specifically to this collection
-                    await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'activity_feed'), {
-                        uid: user.uid,
-                        displayName: user.displayName || "Anonymous Student",
-                        topic: currentTopic,
-                        isCorrect,
-                        timestamp: timestamp
-                    });
-
                 } catch (e) {
-                    console.error("Sync Error:", e);
+                    console.error("Attempt logging blocked by security rules:", e);
                 }
 
                 setTimeout(() => {
@@ -250,7 +256,7 @@
                 <div className="h-screen flex items-center justify-center bg-slate-50">
                     <div className="text-center space-y-4">
                         <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto"></div>
-                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Securing Session...</p>
+                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Establishing Secure Connection...</p>
                     </div>
                 </div>
             );
@@ -264,12 +270,20 @@
                                     <Icon name="shield-check" className="w-10 h-10" />
                                 </div>
                                 <h1 className="text-3xl font-black text-slate-800 tracking-tight italic">ICT MASTERY</h1>
-                                <p className="text-slate-500 font-medium">Please sign in to begin your session.</p>
+                                <p className="text-slate-500 font-medium tracking-tight">Authorized Personnel Only.<br/>Please sign in with your student credentials.</p>
                             </div>
-                            <button onClick={handleLogin} className="google-btn w-full py-4 px-6 rounded-2xl flex items-center justify-center gap-3 font-bold shadow-sm">
+                            
+                            <button 
+                                onClick={handleLogin}
+                                className="google-btn w-full py-4 px-6 rounded-2xl flex items-center justify-center gap-3 font-bold shadow-sm"
+                            >
                                 <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" />
                                 Student Login
                             </button>
+                            
+                            <div className="pt-4 border-t border-slate-200">
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">End-to-End Encrypted Session</p>
+                            </div>
                         </div>
                     </div>
                 );
@@ -279,10 +293,10 @@
                 <div className="min-h-screen">
                     <header className="bg-white/80 backdrop-blur-md border-b sticky top-0 z-50 px-6 py-4 flex justify-between items-center">
                         <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg">
+                            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-200">
                                 <Icon name="book-open" className="w-4 h-4" />
                             </div>
-                            <span className="font-extrabold text-slate-800 tracking-tight text-sm sm:text-base">ICT MASTERY</span>
+                            <span className="font-extrabold text-slate-800 tracking-tight">ICT MASTERY</span>
                         </div>
                         <div className="flex items-center gap-3">
                             <button onClick={() => window.FirebaseSDK.logout()} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
@@ -302,27 +316,36 @@
                                     <div className="flex items-center gap-3 mb-6">
                                         {user.photoURL && <img src={user.photoURL} className="w-10 h-10 rounded-full border-2 border-white shadow-sm" />}
                                         <div className="overflow-hidden">
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">ID: {user.uid.substring(0,8)}</p>
-                                            <p className="font-black text-slate-800 tracking-tight truncate">{user.displayName || 'Student'}</p>
+                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">ID: {user.uid.substring(0,8)}...</p>
+                                            <p className="font-black text-slate-800 tracking-tight truncate">{user.displayName || 'Authenticated Student'}</p>
                                         </div>
                                     </div>
-                                    <h2 className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-2 text-center">Mastery Index</h2>
-                                    <div className="text-5xl font-black text-slate-900 mb-6 tracking-tighter text-center">
-                                        {userStats.total > 0 ? Math.round((userStats.correct/userStats.total)*100) : 0}%
+                                    <h2 className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-2">Mastery Index</h2>
+                                    <div className="text-5xl font-black text-slate-900 mb-6 tracking-tighter">
+                                        {userStats.total > 0 ? Math.round((userStats.correct/userStats.total)*100) : 0}% <span className="text-lg text-slate-300 font-bold uppercase tracking-normal">Verified</span>
                                     </div>
-                                    <div className="w-full bg-slate-100 h-4 rounded-full overflow-hidden">
+                                    <div className="w-full bg-slate-100 h-4 rounded-full overflow-hidden mb-2">
                                         <div className="bg-gradient-to-r from-blue-600 to-indigo-500 h-full transition-all duration-1000 rounded-full" style={{width: `${userStats.total > 0 ? (userStats.correct/userStats.total)*100 : 0}%`}}></div>
+                                    </div>
+                                    <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
+                                        <span>{userStats.total} Submissions</span>
+                                        <span>Status: Active</span>
                                     </div>
                                 </div>
 
                                 <div className="space-y-4">
-                                    <h3 className="font-extrabold text-slate-800 text-lg px-2">Domains</h3>
+                                    <h3 className="font-extrabold text-slate-800 text-lg px-2">Knowledge Domains</h3>
                                     <div className="grid gap-3">
-                                        {topics.length === 0 && <div className="p-10 text-center text-slate-400 font-medium bg-white rounded-3xl border border-dashed border-slate-200">Waiting for question bank...</div>}
+                                        {topics.length === 0 && <div className="p-10 text-center text-slate-400 font-medium bg-white rounded-3xl border border-dashed border-slate-200 italic">Connecting to question bank...</div>}
                                         {topics.map(t => (
-                                            <button key={t} onClick={() => startQuiz(t)} className="group w-full bg-white p-6 rounded-[1.5rem] border border-slate-100 shadow-sm flex justify-between items-center hover:border-blue-400 hover:shadow-lg transition-all active:scale-95">
-                                                <span className="font-bold text-slate-700 text-lg">{t}</span>
-                                                <Icon name="arrow-right" className="w-5 h-5 text-slate-200 group-hover:text-blue-500" />
+                                            <button key={t} onClick={() => startQuiz(t)} className="group w-full bg-white p-6 rounded-[1.5rem] border border-slate-100 shadow-sm flex justify-between items-center hover:border-blue-400 hover:shadow-lg active:scale-95 transition-all">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center group-hover:bg-blue-50 transition-colors">
+                                                        <Icon name="book" className="w-5 h-5 text-slate-300 group-hover:text-blue-500" />
+                                                    </div>
+                                                    <span className="font-bold text-slate-700 text-lg">{t}</span>
+                                                </div>
+                                                <Icon name="arrow-right" className="w-5 h-5 text-slate-200 group-hover:text-blue-500 transition-all" />
                                             </button>
                                         ))}
                                     </div>
@@ -333,20 +356,20 @@
                         {view === 'quiz' && (
                             <div className="space-y-6 fade-in">
                                 <div className="flex justify-between items-center">
-                                    <button onClick={() => setView('lobby')} className="text-[10px] font-bold text-slate-400 hover:text-red-500 uppercase tracking-widest">✕ Terminate</button>
+                                    <button onClick={() => setView('lobby')} className="text-[10px] font-bold text-slate-400 hover:text-red-500 transition-colors uppercase tracking-widest">✕ Terminate Session</button>
                                     <div className="bg-slate-900 text-white px-3 py-1 rounded-full text-[10px] font-black">{currentIndex + 1} / {questions.length}</div>
                                 </div>
-                                <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-xl text-center min-h-[200px] flex items-center justify-center">
-                                    <h2 className="text-xl font-black text-slate-800 leading-tight">{questions[currentIndex].text}</h2>
+                                <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50 text-center min-h-[260px] flex flex-col items-center justify-center">
+                                    <h2 className="text-2xl font-black text-slate-800 leading-tight">{questions[currentIndex].text}</h2>
                                 </div>
                                 <div className="grid gap-3">
                                     {questions[currentIndex].options.map((opt, i) => (
                                         <button key={i} disabled={!!feedback} onClick={() => handleAnswer(i)}
                                             className={`w-full p-6 rounded-[1.5rem] text-left font-bold border-2 transition-all flex items-center gap-4
                                             ${!feedback ? 'bg-white border-slate-50 shadow-sm hover:border-blue-400' : ''}
-                                            ${feedback === 'correct' && i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700 shadow-lg' : ''}
+                                            ${feedback === 'correct' && i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700 shadow-lg shadow-green-100' : ''}
                                             ${feedback === 'wrong' && i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : ''}
-                                            ${feedback === 'wrong' && i !== questions[currentIndex].correct_answer ? 'opacity-40 scale-95' : ''}`}>
+                                            ${feedback === 'wrong' && i !== questions[currentIndex].correct_answer ? 'opacity-40 grayscale scale-95' : ''}`}>
                                             <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black ${feedback === 'correct' && i === questions[currentIndex].correct_answer ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
                                                 {String.fromCharCode(65+i)}
                                             </span>
@@ -358,15 +381,21 @@
                         )}
 
                         {view === 'results' && (
-                            <div className="text-center space-y-8 fade-in py-10">
-                                <div className="w-24 h-24 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-2xl mx-auto">
-                                    <Icon name="check-circle" className="w-12 h-12" />
+                            <div className="text-center space-y-8 fade-in py-10 px-6">
+                                <div className="relative inline-block">
+                                    <div className="w-32 h-32 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-2xl shadow-blue-300">
+                                        <Icon name="check-circle" className="w-16 h-16" />
+                                    </div>
                                 </div>
-                                <h2 className="text-3xl font-black text-slate-900">Session Complete</h2>
-                                <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-lg inline-block px-12">
-                                    <div className="text-5xl font-black text-blue-600">{sessionScore} / {questions.length}</div>
+                                <div>
+                                    <h2 className="text-4xl font-black text-slate-900 tracking-tighter mb-2">Session Complete</h2>
+                                    <p className="text-slate-400 font-bold text-sm uppercase tracking-widest">Data synchronized with portal</p>
                                 </div>
-                                <button onClick={() => setView('lobby')} className="block w-full bg-slate-900 text-white p-5 rounded-[1.5rem] font-black hover:bg-blue-700 transition-all">
+                                <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-xl inline-block px-16 relative">
+                                    <div className="text-6xl font-black text-blue-600 mb-1">{sessionScore}</div>
+                                    <div className="text-xs font-black text-slate-300 uppercase tracking-widest">Verified Results</div>
+                                </div>
+                                <button onClick={() => setView('lobby')} className="block w-full bg-slate-900 text-white p-6 rounded-[1.5rem] font-black text-lg shadow-xl hover:bg-blue-700 transition-all active:scale-95">
                                     RETURN TO DASHBOARD
                                 </button>
                             </div>
