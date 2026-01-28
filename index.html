@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DSE ICT Mastery | Student Portal</title>
+    <!-- Dependencies -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        .fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="bg-[#f8fafc]">
+    <div id="root"></div>
+
+    <!-- Firebase SDK Setup -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, getDocs, addDoc, serverTimestamp, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // IMPORTANT: Update this config with your actual Firebase Console keys
+        const firebaseConfig = {
+            apiKey: "AIzaSyDSpaXWx2_qT88ffyTdmH43j63PUyJ82-4",
+            authDomain: "ict-learning-platform.firebaseapp.com",
+            projectId: "ict-learning-platform",
+            storageBucket: "ict-learning-platform.firebasestorage.app",
+            messagingSenderId: "720934184836",
+            appId: "1:720934184836:web:2360db67abb324890e1fd1"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        window.FirebaseSDK = {
+            auth: getAuth(app),
+            db: getFirestore(app),
+            signInAnonymously,
+            onAuthStateChanged,
+            collection,
+            getDocs,
+            addDoc,
+            serverTimestamp,
+            onSnapshot
+        };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        
+        // Wait for Firebase SDK to be ready on window
+        const getFirebase = () => window.FirebaseSDK;
+
+        const appId = "default-app-id";
+
+        // Icon Component Helper
+        const Icon = ({ name, className }) => {
+            useEffect(() => { lucide.createIcons(); }, []);
+            return <i data-lucide={name} className={className}></i>;
+        };
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [view, setView] = useState('lobby'); 
+            const [topics, setTopics] = useState([]);
+            const [currentTopic, setCurrentTopic] = useState(null);
+            const [questions, setQuestions] = useState([]);
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [feedback, setFeedback] = useState(null);
+            const [sessionScore, setSessionScore] = useState(0);
+            const [userStats, setUserStats] = useState({ total: 0, correct: 0 });
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                const sdk = getFirebase();
+                if (!sdk) return;
+
+                const unsubAuth = sdk.onAuthStateChanged(sdk.auth, (u) => {
+                    if (u) setUser(u);
+                    else sdk.signInAnonymously(sdk.auth);
+                });
+                return () => unsubAuth();
+            }, []);
+
+            useEffect(() => {
+                const sdk = getFirebase();
+                if (!user || !sdk) return;
+
+                const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
+                const unsubTopics = sdk.onSnapshot(qRef, (snap) => {
+                    const tags = new Set();
+                    snap.forEach(doc => {
+                        const t = doc.data().topic_tags || ["General"];
+                        (Array.isArray(t) ? t : [t]).forEach(tag => tags.add(tag));
+                    });
+                    setTopics(Array.from(tags).sort());
+                    setLoading(false);
+                });
+
+                const statsRef = sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts');
+                const unsubStats = sdk.onSnapshot(statsRef, (snap) => {
+                    let correct = 0;
+                    snap.forEach(doc => { if (doc.data().isCorrect) correct++; });
+                    setUserStats({ total: snap.size, correct });
+                });
+
+                return () => { unsubTopics(); unsubStats(); };
+            }, [user]);
+
+            const startQuiz = async (topic) => {
+                const sdk = getFirebase();
+                setLoading(true);
+                const qRef = sdk.collection(sdk.db, 'artifacts', appId, 'public', 'data', 'questions');
+                const snap = await sdk.getDocs(qRef);
+                const filtered = snap.docs
+                    .map(doc => ({ id: doc.id, ...doc.data() }))
+                    .filter(q => (q.topic_tags || []).includes(topic));
+                
+                setQuestions(filtered);
+                setCurrentTopic(topic);
+                setCurrentIndex(0);
+                setSessionScore(0);
+                setView('quiz');
+                setLoading(false);
+            };
+
+            const handleAnswer = async (index) => {
+                const sdk = getFirebase();
+                if (feedback) return;
+                const q = questions[currentIndex];
+                const isCorrect = index === q.correct_answer;
+                if (isCorrect) setSessionScore(s => s + 1);
+                setFeedback(isCorrect ? 'correct' : 'wrong');
+
+                await sdk.addDoc(sdk.collection(sdk.db, 'artifacts', appId, 'users', user.uid, 'attempts'), {
+                    question_id: q.id,
+                    topic: currentTopic,
+                    isCorrect,
+                    timestamp: sdk.serverTimestamp()
+                });
+
+                setTimeout(() => {
+                    if (currentIndex + 1 < questions.length) {
+                        setCurrentIndex(i => i + 1);
+                        setFeedback(null);
+                    } else {
+                        setView('results');
+                        setFeedback(null);
+                    }
+                }, 1000);
+            };
+
+            if (loading) return (
+                <div className="h-screen flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen">
+                    {/* Header */}
+                    <header className="bg-white/80 backdrop-blur-md border-b sticky top-0 z-50 px-6 py-4 flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-200">
+                                <Icon name="book-open" className="w-4 h-4" />
+                            </div>
+                            <span className="font-extrabold text-slate-800 tracking-tight">ICT MASTERY</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <div className="text-right hidden sm:block">
+                                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mastery</div>
+                                <div className="text-xs font-black text-slate-700">{userStats.total > 0 ? Math.round((userStats.correct/userStats.total)*100) : 0}%</div>
+                            </div>
+                            <div className="bg-blue-50 border border-blue-100 px-3 py-1.5 rounded-2xl flex items-center gap-2">
+                                <Icon name="trophy" className="w-4 h-4 text-blue-600" />
+                                <span className="text-sm font-black text-blue-700">{userStats.correct}</span>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="max-w-xl mx-auto p-4 pt-8">
+                        {view === 'lobby' && (
+                            <div className="space-y-8 fade-in">
+                                <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-xl shadow-slate-200/50">
+                                    <h2 className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-2">Overall Progress</h2>
+                                    <div className="text-5xl font-black text-slate-900 mb-6 tracking-tighter">
+                                        {userStats.total} <span className="text-lg text-slate-300 font-bold uppercase tracking-normal">Attempts</span>
+                                    </div>
+                                    <div className="w-full bg-slate-100 h-4 rounded-full overflow-hidden mb-2">
+                                        <div className="bg-gradient-to-r from-blue-600 to-indigo-500 h-full transition-all duration-1000 rounded-full" style={{width: `${userStats.total > 0 ? (userStats.correct/userStats.total)*100 : 0}%`}}></div>
+                                    </div>
+                                    <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
+                                        <span>Current Rank: Apprentice</span>
+                                        <span>Next Rank: 100pts</span>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <h3 className="font-extrabold text-slate-800 text-lg px-2">Ready to Practice?</h3>
+                                    <div className="grid gap-3">
+                                        {topics.length === 0 && <div className="p-10 text-center text-slate-400 font-medium">No topics found yet. Sync data in Teacher Bridge!</div>}
+                                        {topics.map(t => (
+                                            <button key={t} onClick={() => startQuiz(t)} className="group w-full bg-white p-6 rounded-[1.5rem] border border-slate-100 shadow-sm flex justify-between items-center hover:border-blue-400 hover:shadow-lg active:scale-95 transition-all">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center group-hover:bg-blue-50 transition-colors">
+                                                        <Icon name="chevron-right" className="w-5 h-5 text-slate-300 group-hover:text-blue-500" />
+                                                    </div>
+                                                    <span className="font-bold text-slate-700 text-lg">{t}</span>
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'quiz' && (
+                            <div className="space-y-6 fade-in">
+                                <div className="flex justify-between items-center">
+                                    <button onClick={() => setView('lobby')} className="text-[10px] font-bold text-slate-400 hover:text-red-500 transition-colors uppercase tracking-widest">✕ Quit Session</button>
+                                    <div className="bg-slate-900 text-white px-3 py-1 rounded-full text-[10px] font-black">{currentIndex + 1} / {questions.length}</div>
+                                </div>
+                                <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50 text-center min-h-[260px] flex flex-col items-center justify-center">
+                                    <div className="text-blue-500 mb-4 opacity-20"><Icon name="help-circle" className="w-12 h-12" /></div>
+                                    <h2 className="text-2xl font-black text-slate-800 leading-tight">{questions[currentIndex].text}</h2>
+                                </div>
+                                <div className="grid gap-3">
+                                    {questions[currentIndex].options.map((opt, i) => (
+                                        <button key={i} disabled={!!feedback} onClick={() => handleAnswer(i)}
+                                            className={`w-full p-6 rounded-[1.5rem] text-left font-bold border-2 transition-all flex items-center gap-4
+                                            ${!feedback ? 'bg-white border-slate-50 shadow-sm hover:border-blue-400' : ''}
+                                            ${feedback === 'correct' && i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700 shadow-lg shadow-green-100' : ''}
+                                            ${feedback === 'wrong' && i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : ''}
+                                            ${feedback === 'wrong' && i !== questions[currentIndex].correct_answer ? 'opacity-40 grayscale scale-95' : ''}`}>
+                                            <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black ${feedback === 'correct' && i === questions[currentIndex].correct_answer ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                {String.fromCharCode(65+i)}
+                                            </span>
+                                            <span className="flex-1">{opt}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'results' && (
+                            <div className="text-center space-y-8 fade-in py-10 px-6">
+                                <div className="relative inline-block">
+                                    <div className="w-32 h-32 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-2xl shadow-blue-300">
+                                        <Icon name="award" className="w-16 h-16" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <h2 className="text-4xl font-black text-slate-900 tracking-tighter mb-2">Well Done!</h2>
+                                    <p className="text-slate-400 font-bold text-sm uppercase tracking-widest">Practice makes perfect</p>
+                                </div>
+                                <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-xl inline-block px-16 relative">
+                                    <div className="text-6xl font-black text-blue-600 mb-1">{sessionScore}</div>
+                                    <div className="text-xs font-black text-slate-300 uppercase tracking-widest">Out of {questions.length} Correct</div>
+                                </div>
+                                <button onClick={() => setView('lobby')} className="block w-full bg-slate-900 text-white p-6 rounded-[1.5rem] font-black text-lg shadow-xl hover:bg-blue-700 transition-all active:scale-95">
+                                    RETURN TO DASHBOARD
+                                </button>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
