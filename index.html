@@ -14,17 +14,18 @@
             0% { transform: scale(0.95); opacity: 0; }
             100% { transform: scale(1); opacity: 1; }
         }
-        #app.hidden { display: none; }
+        #app.hidden { display: none !important; }
+        #loading-overlay { transition: opacity 0.5s ease-out; }
     </style>
 </head>
 <body class="antialiased text-slate-900">
 
     <!-- Loading Overlay -->
-    <div id="loading-overlay" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-50 transition-opacity duration-500">
+    <div id="loading-overlay" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-50">
         <div class="text-center">
             <div class="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-            <p id="loading-text" class="text-slate-600 font-bold tracking-tight">Syncing your progress...</p>
-            <p id="loading-subtext" class="text-slate-400 text-xs mt-2 opacity-0 transition-opacity duration-1000">Connecting to secure session...</p>
+            <p id="loading-text" class="text-slate-600 font-bold tracking-tight">Initializing ICT Mastery...</p>
+            <p id="loading-subtext" class="text-slate-400 text-xs mt-2">Connecting to secure session...</p>
         </div>
     </div>
 
@@ -38,7 +39,7 @@
                 <div>
                     <h1 class="text-lg font-black text-slate-900 leading-none">ICT Mastery</h1>
                     <div class="flex items-center gap-2 mt-1">
-                        <span id="auth-status-tag" class="text-[10px] text-blue-500 font-bold uppercase tracking-tighter">Connecting...</span>
+                        <span id="auth-status-tag" class="text-[10px] text-blue-500 font-bold uppercase tracking-tighter">Syncing...</span>
                     </div>
                 </div>
             </div>
@@ -89,10 +90,9 @@
                         </button>
                     </div>
                     <div id="topics-list" class="grid gap-3">
-                        <!-- Content loaded via JS -->
                          <div class="animate-pulse space-y-3">
-                             <div class="h-20 bg-slate-200 rounded-3xl w-full"></div>
-                             <div class="h-20 bg-slate-200 rounded-3xl w-full"></div>
+                             <div class="h-20 bg-slate-100 rounded-3xl w-full"></div>
+                             <div class="h-20 bg-slate-100 rounded-3xl w-full"></div>
                          </div>
                     </div>
                 </div>
@@ -135,7 +135,6 @@
         import { 
             getAuth, 
             signInAnonymously, 
-            signInWithCustomToken,
             onAuthStateChanged, 
             GoogleAuthProvider, 
             signInWithRedirect, 
@@ -169,26 +168,12 @@
         const overlay = document.getElementById('loading-overlay');
         const appEl = document.getElementById('app');
 
-        // FORCE REVEAL GATEKEEPER
-        // If auth takes more than 4 seconds, show the app regardless. 
-        // Most "stuck" issues are due to getRedirectResult never resolving.
-        const gatekeeper = setTimeout(() => {
-            if (!isAppReady) {
-                console.warn("Gatekeeper triggered: Auth is taking too long. Revealing app in Guest/Current state.");
-                revealApp();
-                if (!currentUser) {
-                    // Force a local guest label if auth is still silent
-                    document.getElementById('auth-status-tag').innerText = 'Offline / Guest';
-                }
-            }
-        }, 4000);
-
+        // IMMEDIATE REVEAL STRATEGY
+        // We reveal the UI almost instantly. Auth happens in parallel.
         function revealApp() {
             if (isAppReady) return;
             isAppReady = true;
-            clearTimeout(gatekeeper);
-            
-            overlay.classList.add('opacity-0');
+            overlay.style.opacity = '0';
             setTimeout(() => {
                 overlay.style.display = 'none';
                 appEl.classList.remove('hidden');
@@ -196,35 +181,33 @@
             }, 500);
         }
 
-        // Rule 3: Auth Before Queries
+        // Wait max 1.5 seconds for Firebase, then show app anyway
+        setTimeout(revealApp, 1500);
+
         async function startAuth() {
             try {
-                // Show subtext after a brief delay so user knows we are trying
-                setTimeout(() => {
-                    const sub = document.getElementById('loading-subtext');
-                    if (sub) sub.classList.remove('opacity-0');
-                }, 1500);
+                // Ensure persistence
+                await setPersistence(auth, browserLocalPersistence).catch(() => {});
+                
+                // Handle redirect results silently
+                getRedirectResult(auth).catch(() => {});
 
-                await setPersistence(auth, browserLocalPersistence);
-                
-                // We don't await getRedirectResult indefinitely; we race it or catch errors
-                getRedirectResult(auth).catch(e => console.warn("Redirect result failed:", e));
-                
+                // Listen for changes
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
                         currentUser = user;
                         setupApp(user);
+                        revealApp(); // Reveal immediately once user is confirmed
                     } else {
-                        // If no user, trigger anonymous sign in
-                        signInAnonymously(auth).catch(e => {
-                            console.error("Anon sign in failed:", e);
-                            revealApp();
+                        // Attempt silent anon sign-in
+                        signInAnonymously(auth).catch(() => {
+                            revealApp(); // Reveal even if sign-in fails
+                            document.getElementById('auth-status-tag').innerText = 'Guest Mode';
                         });
                     }
                 });
-
             } catch (err) {
-                console.error("Auth initialization error:", err);
+                console.warn("Auth setup silent error", err);
                 revealApp();
             }
         }
@@ -235,25 +218,16 @@
                 statusTag.innerText = user.isAnonymous ? 'Guest Mode' : (user.displayName || 'Linked Account');
             }
             
-            if (user.isAnonymous) {
-                document.getElementById('login-banner').classList.remove('hidden');
-                document.getElementById('btn-signout').classList.add('hidden');
-            } else {
-                document.getElementById('login-banner').classList.add('hidden');
-                document.getElementById('btn-signout').classList.remove('hidden');
-            }
+            document.getElementById('login-banner').classList.toggle('hidden', !user.isAnonymous);
+            document.getElementById('btn-signout').classList.toggle('hidden', user.isAnonymous);
             
-            // Start listeners
             listenForData(user);
-            
-            // Brief delay to ensure Firestore handshake completes before showing UI
-            setTimeout(revealApp, 200);
         }
 
         function listenForData(user) {
             if (!user) return;
 
-            // Public Data: Questions (Rule 1)
+            // Public Questions
             const qPath = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
             onSnapshot(qPath, (snap) => {
                 const tags = new Set();
@@ -265,11 +239,10 @@
                 });
                 renderTopics(Array.from(tags).sort());
             }, (err) => {
-                console.error("Questions Permission Error:", err);
-                renderTopics([]); // Clear loading state
+                renderTopics([]); // Clear skeletons
             });
 
-            // Private Data: User Attempts (Rule 1)
+            // Private Stats
             const statsPath = collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
             onSnapshot(statsPath, (snap) => {
                 let correct = 0;
@@ -278,7 +251,7 @@
                 document.getElementById('score-badge').innerText = correct;
                 const pct = snap.size > 0 ? Math.round((correct / snap.size) * 100) : 0;
                 document.getElementById('stats-progress-bar').style.width = pct + '%';
-            }, (err) => console.error("Stats Permission Error:", err));
+            });
         }
 
         function renderTopics(topics) {
@@ -286,15 +259,15 @@
             if (topics.length === 0) {
                 list.innerHTML = `
                     <div class="bg-white p-8 rounded-3xl border border-dashed border-slate-300 text-center">
-                        <p class="text-slate-400 font-bold">No modules found.</p>
-                        <p class="text-slate-400 text-xs">Verify your App ID or wait for teacher sync.</p>
+                        <p class="text-slate-400 font-bold">Waiting for questions...</p>
+                        <p class="text-slate-400 text-xs">Sync with Teacher Bridge to begin.</p>
                     </div>`;
                 return;
             }
             list.innerHTML = topics.map(topic => `
-                <button onclick="window.startQuiz('${topic}')" class="w-full bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:border-blue-500 active:scale-[0.98] transition-all flex justify-between items-center text-left">
+                <button onclick="window.startQuiz('${topic}')" class="group w-full bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:border-blue-500 active:scale-[0.98] transition-all flex justify-between items-center text-left">
                     <span class="font-black text-slate-800 text-lg">${topic}</span>
-                    <i data-lucide="chevron-right" class="w-5 h-5 text-slate-300"></i>
+                    <i data-lucide="chevron-right" class="w-5 h-5 text-slate-300 group-hover:text-blue-500 transition-colors"></i>
                 </button>
             `).join('');
             lucide.createIcons();
@@ -303,9 +276,6 @@
         window.startQuiz = async (topic) => {
             if (!currentUser) return;
             currentTopic = topic;
-            
-            // Show micro-loader
-            document.getElementById('topics-list').innerHTML = `<div class="py-10 text-center animate-pulse font-bold text-blue-600">Preparing Module...</div>`;
             
             const qPath = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
             const snap = await getDocs(qPath);
@@ -339,14 +309,16 @@
             const isCorrect = idx === q.correct_answer;
             if (isCorrect) sessionScore++;
 
-            // Visual feedback
-            const btn = document.querySelectorAll('#quiz-options button')[idx];
+            const btns = document.querySelectorAll('#quiz-options button');
+            btns.forEach(b => b.onclick = null); // Prevent double taps
+            
+            const btn = btns[idx];
             btn.classList.add(isCorrect ? 'border-green-500' : 'border-red-500');
             btn.classList.add(isCorrect ? 'bg-green-50' : 'bg-red-50');
 
             await addDoc(collection(db, 'artifacts', appId, 'users', currentUser.uid, 'attempts'), {
                 topic: currentTopic, isCorrect, timestamp: serverTimestamp()
-            }).catch(e => console.error("Save error:", e));
+            }).catch(() => {});
 
             setTimeout(() => {
                 if (currentIndex + 1 < currentQuestions.length) {
@@ -365,11 +337,9 @@
         window.showLobby = () => showView('lobby');
         function showView(v) {
             ['lobby', 'quiz', 'results'].forEach(id => {
-                const el = document.getElementById(`view-${id}`);
-                if (el) el.classList.add('hidden');
+                document.getElementById(`view-${id}`).classList.add('hidden');
             });
-            const target = document.getElementById(`view-${v}`);
-            if (target) target.classList.remove('hidden');
+            document.getElementById(`view-${v}`).classList.remove('hidden');
             lucide.createIcons();
         }
 
@@ -383,7 +353,7 @@
 
         document.getElementById('btn-quit-quiz').onclick = () => showView('lobby');
 
-        // Kick off the process
+        // Execute
         startAuth();
 
     </script>
