@@ -15,112 +15,118 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
         .loading-spin { animation: spin 1s linear infinite; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        .stat-card { background: white; border-radius: 1.25rem; padding: 1.25rem; border: 1px solid #e2e8f0; }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
-    <!-- Unified Script Block -->
     <script type="module">
+        // Firebase Modular Imports
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, onAuthStateChanged, signInAnonymously, signInWithPopup, GoogleAuthProvider, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { 
+            getAuth, 
+            onAuthStateChanged, 
+            signInAnonymously, 
+            signInWithCustomToken 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            collection, 
+            onSnapshot, 
+            addDoc, 
+            serverTimestamp,
+            query 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Global state for React to pick up
-        window.FB_INSTANCE = null;
-        window.FB_STATUS = "initializing";
+        // Configuration and Initialization
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-        async function startFirebase() {
-            try {
-                if (typeof __firebase_config === 'undefined') {
-                    window.FB_STATUS = "error: config missing";
-                    return;
-                }
-                
-                const config = JSON.parse(__firebase_config);
-                const app = initializeApp(config);
-                const auth = getAuth(app);
-                const db = getFirestore(app);
-                const provider = new GoogleAuthProvider();
-
-                window.FB_INSTANCE = { 
-                    auth, db, provider, 
-                    methods: { onAuthStateChanged, signInAnonymously, signInWithPopup, signOut, collection, onSnapshot, addDoc, serverTimestamp } 
-                };
-                window.FB_STATUS = "ready";
-                window.dispatchEvent(new Event('fb-ready'));
-            } catch (err) {
-                console.error(err);
-                window.FB_STATUS = "error: " + err.message;
+        // Bridge to React
+        window.FirebaseCore = {
+            auth, db, appId,
+            methods: { 
+                onAuthStateChanged, signInAnonymously, signInWithCustomToken,
+                collection, onSnapshot, addDoc, serverTimestamp, query
             }
-        }
-
-        startFirebase();
+        };
+        window.dispatchEvent(new Event('firebase-ready'));
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
+        // Simple Icon Wrapper for Lucide
         const Icon = ({ name, className }) => {
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name, className]);
             return <i data-lucide={name} className={className}></i>;
         };
 
         function App() {
-            const [status, setStatus] = useState("loading");
             const [user, setUser] = useState(null);
-            const [view, setView] = useState('lobby');
+            const [status, setStatus] = useState("initializing");
             const [questions, setQuestions] = useState([]);
             const [attempts, setAttempts] = useState([]);
+            const [view, setView] = useState('lobby');
             const [quiz, setQuiz] = useState([]);
             const [idx, setIdx] = useState(0);
             const [score, setScore] = useState(0);
-            const [appId] = useState(typeof __app_id !== 'undefined' ? __app_id : 'demo-ict-app');
 
+            // 1. Handle Authentication
             useEffect(() => {
-                const init = async () => {
-                    if (window.FB_STATUS.startsWith('error')) {
-                        setStatus(window.FB_STATUS);
+                const setupAuth = async () => {
+                    if (!window.FirebaseCore) {
+                        window.addEventListener('firebase-ready', setupAuth);
                         return;
                     }
 
-                    if (!window.FB_INSTANCE) {
-                        window.addEventListener('fb-ready', init);
-                        return;
-                    }
-
-                    const { auth, methods } = window.FB_INSTANCE;
+                    const { auth, methods } = window.FirebaseCore;
                     
-                    // Auth flow
-                    methods.onAuthStateChanged(auth, (u) => {
+                    const initSignIn = async () => {
+                        try {
+                            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                                await methods.signInWithCustomToken(auth, __initial_auth_token);
+                            } else {
+                                await methods.signInAnonymously(auth);
+                            }
+                        } catch (err) {
+                            console.error("Auth error:", err);
+                            setStatus("error");
+                        }
+                    };
+
+                    initSignIn();
+                    return methods.onAuthStateChanged(auth, (u) => {
                         if (u) {
                             setUser(u);
-                            setStatus("authenticated");
-                        } else {
-                            methods.signInAnonymously(auth).catch(e => setStatus("error: auth failed"));
+                            setStatus("ready");
                         }
                     });
                 };
 
-                init();
-                return () => window.removeEventListener('fb-ready', init);
+                const unsubAuth = setupAuth();
+                return () => { if (typeof unsubAuth === 'function') unsubAuth(); };
             }, []);
 
-            // Data listeners
+            // 2. Data Listeners
             useEffect(() => {
-                if (status !== "authenticated" || !user) return;
-                const { db, methods } = window.FB_INSTANCE;
+                if (status !== "ready" || !user) return;
+                const { db, appId, methods } = window.FirebaseCore;
 
+                // Listen for Questions (Public)
                 const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
-                const unsubQ = methods.onSnapshot(qRef, (s) => {
-                    setQuestions(s.docs.map(d => ({ id: d.id, ...d.data() })));
-                });
+                const unsubQ = methods.onSnapshot(qRef, (snap) => {
+                    setQuestions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                }, (err) => console.error("Firestore Q Error:", err));
 
+                // Listen for Personal Attempts (Private)
                 const aRef = methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
-                const unsubA = methods.onSnapshot(aRef, (s) => {
-                    setAttempts(s.docs.map(d => d.data()));
-                });
+                const unsubA = methods.onSnapshot(aRef, (snap) => {
+                    setAttempts(snap.docs.map(d => d.data()));
+                }, (err) => console.error("Firestore A Error:", err));
 
                 return () => { unsubQ(); unsubA(); };
             }, [status, user]);
@@ -133,121 +139,137 @@
                 setView('quiz');
             };
 
-            const submitAnswer = async (choice) => {
-                const q = quiz[idx];
-                const isCorrect = choice === q.correct_answer;
+            const submitAnswer = async (choiceIdx) => {
+                const currentQ = quiz[idx];
+                const isCorrect = choiceIdx === currentQ.correct_answer;
                 if (isCorrect) setScore(s => s + 1);
 
-                const { db, methods } = window.FB_INSTANCE;
-                const attempt = {
-                    questionId: q.id,
+                const { db, appId, methods } = window.FirebaseCore;
+                
+                // Record attempt
+                await methods.addDoc(methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts'), {
+                    questionId: currentQ.id,
                     isCorrect,
                     timestamp: methods.serverTimestamp(),
-                    topic: q.topic || "General"
-                };
+                    topic: currentQ.topic || "General"
+                });
 
-                await methods.addDoc(methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts'), attempt);
-                
+                // Record for teacher activity feed
+                await methods.addDoc(methods.collection(db, 'artifacts', appId, 'public', 'data', 'activity_feed'), {
+                    uid: user.uid,
+                    isCorrect,
+                    topic: currentQ.topic || "General",
+                    timestamp: methods.serverTimestamp()
+                });
+
                 if (idx + 1 < quiz.length) setIdx(idx + 1);
                 else setView('results');
             };
 
-            if (status === "loading") return (
-                <div className="h-screen flex flex-col items-center justify-center space-y-4">
-                    <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full loading-spin"></div>
-                    <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Initializing Portal...</p>
-                </div>
-            );
-
-            if (status.startsWith("error")) return (
-                <div className="h-screen flex flex-col items-center justify-center p-6 text-center">
-                    <Icon name="alert-triangle" className="w-12 h-12 text-red-500 mb-4" />
-                    <h1 className="text-xl font-bold">System Error</h1>
-                    <p className="text-slate-500 mt-2">{status}</p>
-                    <button onClick={() => window.location.reload()} className="mt-6 bg-slate-900 text-white px-6 py-2 rounded-lg">Retry</button>
+            if (status === "initializing") return (
+                <div className="h-screen flex flex-col items-center justify-center gap-4">
+                    <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full loading-spin"></div>
+                    <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Connecting to Campus...</p>
                 </div>
             );
 
             return (
-                <div className="max-w-md mx-auto min-h-screen p-4">
-                    <header className="flex justify-between items-center py-6">
+                <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col">
+                    <header className="p-6 flex justify-between items-center bg-white border-b sticky top-0 z-10">
                         <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
+                            <div className="bg-blue-600 p-2 rounded-lg text-white">
                                 <Icon name="graduation-cap" className="w-5 h-5" />
                             </div>
-                            <span className="font-black text-xl italic">ICT MASTER</span>
+                            <h1 className="font-black text-xl italic tracking-tighter">ICT MASTER</h1>
                         </div>
-                        <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400">
-                            <div className={`w-2 h-2 rounded-full ${questions.length > 0 ? 'bg-green-500' : 'bg-orange-500'}`}></div>
-                            {questions.length} QUESTIONS LIVE
+                        <div className="flex items-center gap-2 bg-blue-50 px-3 py-1 rounded-full border border-blue-100">
+                            <Icon name="award" className="w-4 h-4 text-blue-600" />
+                            <span className="text-sm font-black text-blue-700">{attempts.filter(a => a.isCorrect).length}</span>
                         </div>
                     </header>
 
-                    {view === 'lobby' && (
-                        <div className="space-y-6">
-                            <div className="bg-slate-900 text-white p-6 rounded-[2rem] shadow-xl relative overflow-hidden">
-                                <div className="relative z-10">
-                                    <h2 className="text-2xl font-black italic">READY TO PRACTICE?</h2>
-                                    <p className="text-xs opacity-60 mt-1">Strengthen your DSE ICT foundations.</p>
-                                    <button 
-                                        onClick={startQuiz}
-                                        disabled={questions.length === 0}
-                                        className="mt-6 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 w-full py-4 rounded-xl font-black transition-all flex items-center justify-center gap-2"
-                                    >
-                                        {questions.length === 0 ? "WAITING FOR TEACHER..." : "START DAILY 5"}
-                                        <Icon name="play" className="w-4 h-4 fill-current" />
-                                    </button>
+                    <main className="flex-1 p-4">
+                        {view === 'lobby' && (
+                            <div className="space-y-6">
+                                <div className="bg-slate-900 rounded-[2.5rem] p-8 text-white relative overflow-hidden shadow-2xl">
+                                    <div className="relative z-10">
+                                        <h2 className="text-3xl font-black italic leading-none">PRACTICE<br/>MAKES PERFECT</h2>
+                                        <p className="text-slate-400 text-sm mt-3">Test your DSE ICT knowledge.</p>
+                                        <button 
+                                            onClick={startQuiz}
+                                            disabled={questions.length === 0}
+                                            className="mt-8 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 w-full py-4 rounded-2xl font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20"
+                                        >
+                                            {questions.length === 0 ? "NO QUESTIONS LOADED" : "START DAILY DRILL"}
+                                            <Icon name="play" className="w-4 h-4 fill-current" />
+                                        </button>
+                                    </div>
+                                    <Icon name="cpu" className="absolute -right-6 -bottom-6 w-40 h-40 opacity-10" />
                                 </div>
-                                <Icon name="zap" className="absolute -right-4 -bottom-4 w-32 h-32 opacity-10" />
-                            </div>
 
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="stat-card">
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase">Correct</p>
-                                    <p className="text-3xl font-black text-blue-600">{attempts.filter(a => a.isCorrect).length}</p>
-                                </div>
-                                <div className="stat-card">
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase">Attempts</p>
-                                    <p className="text-3xl font-black text-slate-800">{attempts.length}</p>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {view === 'quiz' && (
-                        <div className="space-y-6">
-                            <div className="flex justify-between items-center px-2">
-                                <span className="text-xs font-black text-slate-400">QUESTION {idx + 1} / {quiz.length}</span>
-                                <div className="h-1.5 w-32 bg-slate-200 rounded-full overflow-hidden">
-                                    <div className="h-full bg-blue-600 transition-all" style={{width: `${((idx+1)/quiz.length)*100}%`}}></div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="bg-white p-6 rounded-3xl border border-slate-200">
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Done</p>
+                                        <p className="text-3xl font-black text-slate-800">{attempts.length}</p>
+                                    </div>
+                                    <div className="bg-white p-6 rounded-3xl border border-slate-200">
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Accuracy</p>
+                                        <p className="text-3xl font-black text-blue-600">
+                                            {attempts.length > 0 ? Math.round((attempts.filter(a=>a.isCorrect).length/attempts.length)*100) : 0}%
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
-                            
-                            <div className="bg-white p-8 rounded-[2rem] border-2 border-slate-100 shadow-sm min-h-[160px] flex items-center justify-center text-center">
-                                <p className="text-lg font-bold text-slate-800 leading-tight">{quiz[idx].text}</p>
-                            </div>
+                        )}
 
-                            <div className="grid gap-3">
-                                {quiz[idx].options.map((opt, i) => (
-                                    <button key={i} onClick={() => submitAnswer(i)} className="w-full p-5 bg-white border-2 border-slate-100 rounded-2xl text-left font-bold hover:border-blue-500 hover:bg-blue-50 transition-all flex items-center gap-4">
-                                        <span className="w-8 h-8 bg-slate-100 rounded flex items-center justify-center text-xs text-slate-400">{String.fromCharCode(65+i)}</span>
-                                        {opt}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
+                        {view === 'quiz' && (
+                            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                <div className="flex justify-between items-center px-2">
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Q{idx + 1} OF {quiz.length}</span>
+                                    <div className="h-1.5 w-32 bg-slate-200 rounded-full overflow-hidden">
+                                        <div className="h-full bg-blue-600 transition-all" style={{width: `${((idx+1)/quiz.length)*100}%`}}></div>
+                                    </div>
+                                </div>
 
-                    {view === 'results' && (
-                        <div className="text-center py-12 space-y-6">
-                            <div className="w-24 h-24 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto">
-                                <Icon name="check-circle" className="w-12 h-12" />
+                                <div className="bg-white p-8 rounded-[2rem] border-2 border-slate-100 shadow-sm min-h-[180px] flex items-center justify-center text-center">
+                                    <p className="text-xl font-bold text-slate-800 leading-tight">{quiz[idx].text}</p>
+                                </div>
+
+                                <div className="grid gap-3">
+                                    {quiz[idx].options.map((opt, i) => (
+                                        <button 
+                                            key={i} 
+                                            onClick={() => submitAnswer(i)} 
+                                            className="w-full p-5 bg-white border-2 border-slate-100 rounded-2xl text-left font-bold hover:border-blue-500 hover:bg-blue-50 active:scale-[0.98] transition-all flex items-center gap-4 group"
+                                        >
+                                            <span className="w-10 h-10 bg-slate-100 group-hover:bg-blue-100 group-hover:text-blue-600 rounded-xl flex items-center justify-center text-sm text-slate-400 font-black transition-colors">
+                                                {String.fromCharCode(65+i)}
+                                            </span>
+                                            <span className="text-slate-700">{opt}</span>
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
-                            <h2 className="text-3xl font-black">All Done!</h2>
-                            <p className="text-slate-500 font-bold">You got {score} out of {quiz.length} correct.</p>
-                            <button onClick={() => setView('lobby')} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold">Return Home</button>
-                        </div>
-                    )}
+                        )}
+
+                        {view === 'results' && (
+                            <div className="flex-1 flex flex-col items-center justify-center py-10 space-y-6 text-center animate-in zoom-in-95 duration-300">
+                                <div className="w-24 h-24 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center shadow-inner">
+                                    <Icon name="check" className="w-12 h-12" />
+                                </div>
+                                <div>
+                                    <h2 className="text-4xl font-black italic tracking-tighter">GOOD WORK!</h2>
+                                    <p className="text-slate-500 font-bold mt-2">You mastered {score} questions in this session.</p>
+                                </div>
+                                <button 
+                                    onClick={() => setView('lobby')} 
+                                    className="w-full max-w-xs py-5 bg-slate-900 text-white rounded-2xl font-black shadow-xl shadow-slate-200 active:scale-95 transition-all"
+                                >
+                                    BACK TO DASHBOARD
+                                </button>
+                            </div>
+                        )}
+                    </main>
                 </div>
             );
         }
