@@ -4,484 +4,334 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DSE ICT Mastery - Student Portal</title>
-    
-    <!-- Styling & Fonts -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
-        .animate-in { animation: fadeIn 0.4s ease-out forwards; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .progress-bar { transition: width 1s cubic-bezier(0.4, 0, 0.2, 1); }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; color: #1e293b; }
+        .option-card { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+        .mermaid { background: white; border-radius: 1rem; padding: 1.5rem; margin: 1.5rem 0; display: flex; justify-content: center; overflow-x: auto; border: 1px solid #e2e8f0; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
     </style>
-
-    <!-- React Dependencies -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <!-- Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 </head>
 <body>
     <div id="root"></div>
 
-    <!-- Firebase SDK Setup -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { 
-            getAuth, onAuthStateChanged, signInAnonymously, signInWithRedirect, 
-            getRedirectResult, GoogleAuthProvider, setPersistence, 
-            browserLocalPersistence, signOut 
-        } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
-        import { 
-            getFirestore, collection, onSnapshot, addDoc, getDocs, serverTimestamp, query, orderBy 
-        } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyDSpaXWx2_qT88ffyTdmH43j63PUyJ82-4",
-            authDomain: "ict-learning-platform.firebaseapp.com",
-            projectId: "ict-learning-platform",
-            storageBucket: "ict-learning-platform.firebasestorage.app",
-            messagingSenderId: "720934184836",
-            appId: "1:720934184836:web:2360db67abb324890e1fd1",
-            measurementId: "G-2CF8HRGW6C"
-        };
-
+        // Global Firebase Config
+        const firebaseConfig = JSON.parse(__firebase_config);
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
         window.FB = { 
-            auth, db, 
-            providers: { GoogleAuthProvider },
+            auth, 
+            db, 
+            appId, 
             methods: { 
-                onAuthStateChanged, signInAnonymously, signInWithRedirect, 
-                getRedirectResult, setPersistence, browserLocalPersistence, 
-                signOut, collection, onSnapshot, addDoc, getDocs, serverTimestamp, query, orderBy
-            }
+                onAuthStateChanged, 
+                signInAnonymously, 
+                signInWithCustomToken,
+                collection, 
+                onSnapshot, 
+                addDoc, 
+                serverTimestamp 
+            } 
         };
         window.dispatchEvent(new Event('firebase-ready'));
     </script>
 
-    <!-- Main App Logic -->
     <script type="text/babel">
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect, useMemo, useRef } = React;
 
         const Icon = ({ name, className }) => {
-            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name, className]);
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} className={className}></i>;
         };
 
+        const MermaidChart = ({ code }) => {
+            const chartRef = useRef(null);
+            useEffect(() => {
+                if (code && chartRef.current) {
+                    mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'loose' });
+                    mermaid.contentLoaded();
+                    mermaid.init(undefined, chartRef.current);
+                }
+            }, [code]);
+
+            if (!code) return null;
+            return <div className="mermaid" ref={chartRef}>{code}</div>;
+        };
+
         function App() {
+            const [view, setView] = useState('landing'); // landing, quiz, results
             const [user, setUser] = useState(null);
-            const [authChecking, setAuthChecking] = useState(true);
-            const [view, setView] = useState('lobby');
-            const [topics, setTopics] = useState([]);
-            const [currentTopic, setCurrentTopic] = useState(null);
             const [questions, setQuestions] = useState([]);
             const [currentIndex, setCurrentIndex] = useState(0);
-            const [feedback, setFeedback] = useState(null);
-            const [sessionScore, setSessionScore] = useState(0);
-            const [userStats, setUserStats] = useState({ total: 0, correct: 0 });
-            const [topicStats, setTopicStats] = useState({});
-            
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const [selectedIndices, setSelectedIndices] = useState([]);
+            const [isSubmitted, setIsSubmitted] = useState(false);
+            const [score, setScore] = useState(0);
+            const [loading, setLoading] = useState(true);
 
-            // Auth Handshake
+            // Authentication Handler (Rule 3: Auth Before Queries)
             useEffect(() => {
-                const init = async () => {
+                const initAuth = async () => {
                     if (!window.FB) {
-                        window.addEventListener('firebase-ready', init);
+                        window.addEventListener('firebase-ready', initAuth);
                         return;
                     }
                     const { auth, methods } = window.FB;
                     
                     try {
-                        await methods.setPersistence(auth, methods.browserLocalPersistence);
-                        await methods.getRedirectResult(auth);
-                    } catch(e) { console.error("Auth error", e); }
-                    
-                    methods.onAuthStateChanged(auth, (u) => {
-                        setUser(u);
-                        setAuthChecking(false);
-                        if (!u) methods.signInAnonymously(auth);
-                    });
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await methods.signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await methods.signInAnonymously(auth);
+                        }
+                    } catch (err) {
+                        console.error("Auth failed", err);
+                    }
+
+                    const unsubscribe = methods.onAuthStateChanged(auth, setUser);
+                    return () => unsubscribe();
                 };
-                init();
+                initAuth();
             }, []);
 
-            // Data Streams
+            // Data Fetching Handler (Rule 3: Guard with user check)
             useEffect(() => {
                 if (!user || !window.FB) return;
-                const { db, methods } = window.FB;
-
-                // Load Questions and Extract Tags
+                
+                const { db, appId, methods } = window.FB;
                 const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
-                const unsubTopics = methods.onSnapshot(qRef, (snap) => {
-                    const tags = new Set();
-                    snap.forEach(doc => {
-                        const data = doc.data();
-                        const t = data.topic_tags || data.topic || data.tags || "General";
-                        if (Array.isArray(t)) t.forEach(tag => tags.add(tag));
-                        else tags.add(t);
-                    });
-                    setTopics(Array.from(tags).sort());
+                
+                const unsub = methods.onSnapshot(qRef, (snap) => {
+                    const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setQuestions(data);
+                    setLoading(false);
+                }, (err) => {
+                    console.error("Firestore snapshot error:", err);
+                    setLoading(false);
                 });
-
-                // Load Global Stats (Private to User)
-                const statsRef = methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
-                const unsubStats = methods.onSnapshot(statsRef, (snap) => {
-                    let correct = 0;
-                    const stats = {};
-                    snap.forEach(d => { 
-                        const data = d.data();
-                        if (data.isCorrect) correct++;
-                        
-                        const t = data.topic || "General";
-                        if (!stats[t]) stats[t] = { correct: 0, total: 0, lastTry: 0 };
-                        stats[t].total++;
-                        if (data.isCorrect) stats[t].correct++;
-                        const ts = data.timestamp?.toDate().getTime() || 0;
-                        if (ts > stats[t].lastTry) stats[t].lastTry = ts;
-                    });
-                    setUserStats({ total: snap.size, correct });
-                    setTopicStats(stats);
-                });
-
-                return () => { unsubTopics(); unsubStats(); };
+                
+                return () => unsub();
             }, [user]);
 
-            // Performance Calculation
-            const performanceSets = useMemo(() => {
-                const results = topics.map(t => {
-                    const s = topicStats[t] || { correct: 0, total: 0, lastTry: 0 };
-                    const rate = s.total > 0 ? (s.correct / s.total) : -1;
-                    return { name: t, rate, ...s };
-                });
+            const currentQ = questions[currentIndex];
 
-                const tried = results.filter(r => r.total > 0);
-                const best = [...tried].sort((a, b) => b.rate - a.rate || b.total - a.total).slice(0, 3);
-                const worst = [...tried].sort((a, b) => a.rate - b.rate || b.total - a.total).slice(0, 3);
-                
-                return { best, worst };
-            }, [topics, topicStats]);
-
-            const handleGoogleSignIn = async () => {
-                const { auth, providers, methods } = window.FB;
-                const provider = new providers.GoogleAuthProvider();
-                await methods.signInWithRedirect(auth, provider);
+            const toggleOption = (idx) => {
+                if (isSubmitted) return;
+                if (currentQ.type === 'MC1') {
+                    setSelectedIndices([idx]);
+                } else {
+                    setSelectedIndices(prev => 
+                        prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]
+                    );
+                }
             };
 
-            const startQuiz = async (topic, limit = 1) => {
-                const { db, methods } = window.FB;
-                const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
-                const snapshot = await methods.getDocs(qRef);
-                const filtered = snapshot.docs
-                    .map(d => ({ id: d.id, ...d.data() }))
-                    .filter(q => {
-                        const t = q.topic_tags || q.topic || q.tags || "General";
-                        return Array.isArray(t) ? t.includes(topic) : t === topic;
-                    });
-                
-                if (filtered.length === 0) return;
-                setQuestions(filtered.sort(() => Math.random() - 0.5).slice(0, limit));
-                setCurrentTopic(topic);
-                setCurrentIndex(0);
-                setSessionScore(0);
-                setView('quiz');
-            };
+            const handleSubmit = async () => {
+                if (!user) return;
 
-            const startChallenge = async () => {
-                const { db, methods } = window.FB;
-                const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
-                const snapshot = await methods.getDocs(qRef);
-                const allQs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                const isMC2 = currentQ.type === 'MC2';
+                const correct = currentQ.correct_answer;
+                let isCorrect = false;
 
-                const getQsForTopic = (list, topicNames) => {
-                    return list.filter(q => {
-                        const t = q.topic_tags || q.topic || q.tags || "General";
-                        return Array.isArray(t) 
-                            ? t.some(tag => topicNames.includes(tag)) 
-                            : topicNames.includes(t);
-                    });
-                };
-
-                // 1. 2 from worst topics
-                const worstTopicNames = performanceSets.worst.map(t => t.name);
-                const worstSelection = getQsForTopic(allQs, worstTopicNames).sort(() => Math.random() - 0.5).slice(0, 2);
-
-                // 2. 1 from topic not tried longest time ago
-                const sortedByTime = topics.map(t => ({
-                    name: t,
-                    lastTry: topicStats[t]?.lastTry || 0
-                })).sort((a, b) => a.lastTry - b.lastTry);
-                const oldestTopic = sortedByTime[0]?.name;
-                const oldestSelection = oldestTopic ? getQsForTopic(allQs, [oldestTopic]).sort(() => Math.random() - 0.5).slice(0, 1) : [];
-
-                // 3. 2 from other topics
-                const usedIds = new Set([...worstSelection, ...oldestSelection].map(q => q.id));
-                const otherSelection = allQs.filter(q => !usedIds.has(q.id)).sort(() => Math.random() - 0.5).slice(0, 2);
-
-                const finalSet = [...worstSelection, ...oldestSelection, ...otherSelection];
-                
-                // Final safety check to reach 5
-                if (finalSet.length < 5) {
-                    const remainingNeeded = 5 - finalSet.length;
-                    const usedIdsFinal = new Set(finalSet.map(q => q.id));
-                    const fillPool = allQs.filter(q => !usedIdsFinal.has(q.id)).sort(() => Math.random() - 0.5).slice(0, remainingNeeded);
-                    finalSet.push(...fillPool);
+                if (isMC2) {
+                    const sortedSelected = [...selectedIndices].sort();
+                    const sortedCorrect = Array.isArray(correct) ? [...correct].sort() : [correct];
+                    isCorrect = JSON.stringify(sortedSelected) === JSON.stringify(sortedCorrect);
+                } else {
+                    isCorrect = selectedIndices[0] === correct;
                 }
 
-                setQuestions(finalSet.sort(() => Math.random() - 0.5));
-                setCurrentTopic("Challenge Mode");
-                setCurrentIndex(0);
-                setSessionScore(0);
-                setView('quiz');
-            };
+                if (isCorrect) setScore(s => s + 1);
+                setIsSubmitted(true);
 
-            const handleAnswer = async (idx) => {
-                if (feedback) return;
-                const q = questions[currentIndex];
-                const correct = idx === q.correct_answer;
-                const { db, methods } = window.FB;
-
-                setFeedback(correct ? 'correct' : 'wrong');
-                if (correct) setSessionScore(s => s + 1);
-
-                // Extract a single topic string for stats tracking
-                const qTopic = Array.isArray(q.topic_tags) ? q.topic_tags[0] : (q.topic || q.tags || "General");
-
+                const { db, appId, methods } = window.FB;
                 try {
-                    // Record private attempt
-                    await methods.addDoc(methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts'), {
-                        question_id: q.id,
-                        isCorrect: correct,
-                        topic: qTopic,
-                        timestamp: methods.serverTimestamp()
-                    });
-
-                    // Record for teacher activity feed
                     await methods.addDoc(methods.collection(db, 'artifacts', appId, 'public', 'data', 'activity_feed'), {
-                        uid: user.uid,
-                        displayName: user?.displayName || "Guest",
-                        topic: qTopic,
-                        isCorrect: correct,
+                        userId: user.uid,
+                        displayName: user.isAnonymous ? `Student ${user.uid.slice(0, 4)}` : user.displayName,
+                        questionId: currentQ.question_id || currentQ.id,
+                        topic: Array.isArray(currentQ.topic) ? currentQ.topic[0] : (currentQ.topic || 'General'),
+                        isCorrect,
                         timestamp: methods.serverTimestamp()
                     });
-                } catch (err) {
-                    console.error("Failed to save attempt:", err);
-                }
-
-                setTimeout(() => {
-                    if (currentIndex + 1 < questions.length) {
-                        setCurrentIndex(c => c + 1);
-                        setFeedback(null);
-                    } else {
-                        setView('results');
-                        setFeedback(null);
-                    }
-                }, 1200);
+                } catch (e) { console.error("Logging error", e); }
             };
 
-            if (authChecking) return (
-                <div className="h-screen flex items-center justify-center bg-slate-50">
-                    <div className="animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent"></div>
+            const nextStep = () => {
+                if (currentIndex < questions.length - 1) {
+                    setCurrentIndex(i => i + 1);
+                    setSelectedIndices([]);
+                    setIsSubmitted(false);
+                } else {
+                    setView('results');
+                }
+            };
+
+            if (loading) return (
+                <div className="h-screen flex items-center justify-center">
+                    <div className="animate-spin h-10 w-10 border-4 border-blue-600 border-t-transparent rounded-full"></div>
+                </div>
+            );
+
+            if (view === 'landing') return (
+                <div className="min-h-screen flex items-center justify-center p-6">
+                    <div className="max-w-md w-full text-center space-y-8">
+                        <div className="bg-blue-600 w-20 h-20 rounded-3xl flex items-center justify-center mx-auto shadow-xl shadow-blue-200">
+                            <Icon name="book-open" className="w-10 h-10 text-white" />
+                        </div>
+                        <div className="space-y-2">
+                            <h1 className="text-4xl font-black text-slate-900 italic tracking-tight">ICT MASTERY</h1>
+                            <p className="text-slate-500 font-bold uppercase tracking-[0.2em] text-xs">Syllabus Deployment V2.0</p>
+                        </div>
+                        <button 
+                            onClick={() => setView('quiz')}
+                            className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95"
+                        >
+                            Start Session
+                        </button>
+                    </div>
+                </div>
+            );
+
+            if (view === 'results') return (
+                <div className="min-h-screen flex items-center justify-center p-6">
+                    <div className="max-w-md w-full bg-white p-10 rounded-[2.5rem] shadow-xl border border-slate-100 text-center">
+                        <div className="mb-6 inline-block p-4 bg-green-100 rounded-full">
+                            <Icon name="award" className="w-12 h-12 text-green-600" />
+                        </div>
+                        <h2 className="text-3xl font-black text-slate-900 mb-2">Session Complete</h2>
+                        <p className="text-slate-500 font-bold mb-8">Great job on finishing the deployment!</p>
+                        <div className="bg-slate-50 rounded-3xl p-6 mb-8">
+                            <div className="text-5xl font-black text-blue-600 mb-1">{Math.round((score / (questions.length || 1)) * 100)}%</div>
+                            <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Accuracy Score</div>
+                        </div>
+                        <button 
+                            onClick={() => window.location.reload()}
+                            className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-700 transition-all"
+                        >
+                            Try Again
+                        </button>
+                    </div>
                 </div>
             );
 
             return (
-                <div className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-2xl overflow-hidden flex flex-col border-x border-slate-200">
-                    <header className="bg-white p-5 border-b sticky top-0 z-50 flex justify-between items-center shadow-sm">
+                <div className="max-w-2xl mx-auto min-h-screen p-6 flex flex-col">
+                    <header className="flex justify-between items-center mb-8">
                         <div className="flex items-center gap-3">
-                            <div className="bg-blue-600 p-2 rounded-xl text-white shadow-lg shadow-blue-200">
-                                <Icon name="graduation-cap" className="w-5 h-5" />
-                            </div>
-                            <h1 className="font-black text-xl italic tracking-tighter">ICT MASTER</h1>
+                            <div className="bg-slate-900 p-2 rounded-lg"><Icon name="cpu" className="w-5 h-5 text-white" /></div>
+                            <span className="font-black italic text-slate-900 uppercase text-sm">ICT Mastery</span>
                         </div>
-                        <div className="flex items-center gap-3">
-                            <div className="bg-blue-50 text-blue-700 px-3 py-1.5 rounded-2xl text-sm font-black flex items-center gap-2 border border-blue-100">
-                                <Icon name="award" className="w-4 h-4" />
-                                {userStats.correct}
-                            </div>
+                        <div className="bg-blue-50 px-4 py-2 rounded-full border border-blue-100">
+                            <span className="text-blue-700 font-black text-xs uppercase tracking-widest">Q {currentIndex + 1} / {questions.length}</span>
                         </div>
                     </header>
 
-                    <main className="p-4 flex-1 overflow-y-auto">
-                        {view === 'lobby' && (
-                            <div className="space-y-6 animate-in">
-                                {/* Profile Summary */}
-                                <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm relative overflow-hidden">
-                                    <div className="flex items-center gap-4 mb-6">
-                                        <div className="bg-slate-100 w-12 h-12 rounded-2xl flex items-center justify-center">
-                                            <Icon name="user" className="text-slate-400" />
-                                        </div>
-                                        <div>
-                                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Student Portal</p>
-                                            <p className="font-bold text-slate-800">{user?.displayName || "Guest Student"}</p>
-                                        </div>
-                                        {user?.isAnonymous && (
-                                            <button onClick={handleGoogleSignIn} className="ml-auto text-[10px] bg-blue-600 text-white font-black px-3 py-1 rounded-full uppercase">Sync</button>
-                                        )}
-                                    </div>
-
-                                    <div className="space-y-4">
-                                        <div className="flex justify-between items-end">
-                                            <p className="text-4xl font-black">{userStats.total}</p>
-                                            <p className="text-sm font-bold text-blue-600">
-                                                {userStats.total > 0 ? Math.round((userStats.correct / userStats.total) * 100) : 0}% Accuracy
-                                            </p>
-                                        </div>
-                                        <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
-                                            <div 
-                                                className="bg-blue-600 h-full progress-bar shadow-sm" 
-                                                style={{ width: `${userStats.total > 0 ? (userStats.correct / userStats.total) * 100 : 0}%` }}
-                                            />
-                                        </div>
-                                    </div>
-                                    <Icon name="activity" className="absolute -right-4 -bottom-4 w-24 h-24 text-blue-50 opacity-20" />
-                                </div>
-
-                                {/* Performance Widgets */}
-                                {performanceSets.best.length > 0 && (
-                                    <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm space-y-4">
-                                        <div>
-                                            <h4 className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-2 flex items-center gap-1">
-                                                <Icon name="trending-up" className="w-3 h-3"/> Top Performance
-                                            </h4>
-                                            <div className="flex flex-wrap gap-2">
-                                                {performanceSets.best.map(t => (
-                                                    <span key={t.name} className="px-2 py-1 bg-green-50 text-green-700 text-[10px] font-bold rounded-lg border border-green-100">
-                                                        {t.name}
-                                                    </span>
-                                                ))}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <h4 className="text-[10px] font-black text-red-600 uppercase tracking-widest mb-2 flex items-center gap-1">
-                                                <Icon name="trending-down" className="w-3 h-3"/> Critical Review
-                                            </h4>
-                                            <div className="flex flex-wrap gap-2">
-                                                {performanceSets.worst.map(t => (
-                                                    <span key={t.name} className="px-2 py-1 bg-red-50 text-red-700 text-[10px] font-bold rounded-lg border border-red-100">
-                                                        {t.name}
-                                                    </span>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Challenge Button */}
-                                <div className="space-y-6">
-                                    <button 
-                                        onClick={startChallenge}
-                                        className="w-full bg-slate-900 text-white p-5 rounded-[2rem] font-black flex items-center justify-between group overflow-hidden relative shadow-xl active:scale-95 transition-all"
-                                    >
-                                        <div className="relative z-10 flex items-center gap-3">
-                                            <div className="bg-white/10 p-2 rounded-xl">
-                                                <Icon name="zap" className="w-5 h-5 text-yellow-400" />
-                                            </div>
-                                            <div className="text-left">
-                                                <p className="text-sm">DAILY CHALLENGE</p>
-                                                <p className="text-[10px] text-slate-400 font-bold uppercase">5 Targetted Questions</p>
-                                            </div>
-                                        </div>
-                                        <Icon name="arrow-right" className="relative z-10 w-5 h-5 text-white group-hover:translate-x-1 transition-transform" />
-                                        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600 rounded-full blur-3xl opacity-20 -mr-10 -mt-10"></div>
-                                    </button>
-
-                                    {/* Small Tags Practice List */}
-                                    <div className="space-y-3">
-                                        <h3 className="font-black text-slate-800 text-[11px] uppercase tracking-[0.2em] flex items-center gap-2 px-1">
-                                            <Icon name="hash" className="w-3 h-3 text-blue-500" />
-                                            Topic Practice
-                                        </h3>
-                                        <div className="flex flex-wrap gap-2">
-                                            {topics.map(t => (
-                                                <button 
-                                                    key={t} 
-                                                    onClick={() => startQuiz(t, 1)}
-                                                    className="px-3 py-2 bg-white text-slate-600 text-[11px] font-bold rounded-xl border border-slate-200 shadow-sm hover:border-blue-500 hover:text-blue-600 transition-all flex items-center gap-2 active:scale-95"
-                                                >
-                                                    {t}
-                                                    {topicStats[t]?.total > 0 && (
-                                                        <span className="text-[9px] text-slate-300 font-black">{topicStats[t].correct}/{topicStats[t].total}</span>
-                                                    )}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </div>
+                    {currentQ ? (
+                        <div className="bg-white rounded-[2.5rem] p-8 md:p-10 shadow-xl border border-slate-100 flex-grow mb-6 relative overflow-hidden">
+                            <div className="flex flex-wrap gap-2 mb-6">
+                                {(currentQ.topic || []).map(t => (
+                                    <span key={t} className="bg-blue-600 text-white px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest">{t}</span>
+                                ))}
+                                <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest border ${currentQ.type === 'MC2' ? 'bg-purple-50 text-purple-700 border-purple-100' : 'bg-orange-50 text-orange-700 border-orange-100'}`}>
+                                    {currentQ.type}
+                                </span>
                             </div>
-                        )}
 
-                        {view === 'quiz' && (
-                            <div className="space-y-6 animate-in">
-                                <div className="flex justify-between items-center px-2">
-                                    <div className="flex items-center gap-2 overflow-hidden">
-                                        <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0"></div>
-                                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">{currentTopic}</span>
-                                    </div>
-                                    <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest bg-blue-50 px-2 py-0.5 rounded-md">Step {currentIndex + 1}/{questions.length}</span>
-                                </div>
-                                
-                                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm min-h-[220px] flex items-center justify-center text-center relative overflow-hidden">
-                                    <h2 className="text-xl font-black text-slate-800 leading-tight relative z-10">{questions[currentIndex].text}</h2>
-                                    <div className="absolute top-0 left-0 w-full h-1 bg-slate-50">
-                                        <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}></div>
-                                    </div>
-                                </div>
+                            <h3 className="text-xl md:text-2xl font-black text-slate-800 leading-tight mb-6">
+                                {currentQ.text}
+                            </h3>
 
-                                <div className="grid gap-3">
-                                    {questions[currentIndex].options.map((opt, i) => (
+                            <MermaidChart code={currentQ.mermaid_code} />
+
+                            <div className="space-y-3 mt-8">
+                                {(currentQ.options || []).map((opt, i) => {
+                                    const isSelected = selectedIndices.includes(i);
+                                    const isCorrect = Array.isArray(currentQ.correct_answer) ? currentQ.correct_answer.includes(i) : currentQ.correct_answer === i;
+                                    
+                                    let stateClasses = "bg-slate-50 border-slate-100 text-slate-700 hover:border-blue-300";
+                                    if (isSubmitted) {
+                                        if (isCorrect) stateClasses = "bg-green-50 border-green-400 text-green-800";
+                                        else if (isSelected) stateClasses = "bg-red-50 border-red-400 text-red-800";
+                                        else stateClasses = "bg-slate-50 border-slate-100 opacity-50";
+                                    } else if (isSelected) {
+                                        stateClasses = "bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200 translate-x-1";
+                                    }
+
+                                    return (
                                         <button 
-                                            key={i} 
-                                            disabled={!!feedback}
-                                            onClick={() => handleAnswer(i)}
-                                            className={`p-5 rounded-2xl border-2 text-left font-bold transition-all flex items-center gap-4 ${
-                                                feedback === null ? 'bg-white border-slate-100 hover:border-blue-500 hover:bg-blue-50' : 
-                                                (i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : 
-                                                (feedback === 'wrong' && i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : 
-                                                (feedback === 'wrong' && i !== questions[currentIndex].correct_answer ? 'opacity-40 border-slate-100' : 'bg-white border-slate-100')))
-                                            }`}
+                                            key={i}
+                                            onClick={() => toggleOption(i)}
+                                            disabled={isSubmitted}
+                                            className={`w-full p-5 rounded-2xl border-2 text-left font-bold transition-all flex items-center gap-4 option-card ${stateClasses}`}
                                         >
-                                            <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black shrink-0 ${feedback && i === questions[currentIndex].correct_answer ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                            <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-black ${isSelected ? 'bg-white text-blue-600' : 'bg-slate-200 text-slate-500'}`}>
                                                 {String.fromCharCode(65 + i)}
-                                            </span>
-                                            <span className="text-sm">{opt}</span>
+                                            </div>
+                                            <span className="flex-grow">{opt}</span>
+                                            {isSubmitted && isCorrect && <Icon name="check-circle" className="w-5 h-5 text-green-600" />}
+                                            {isSubmitted && !isCorrect && isSelected && <Icon name="x-circle" className="w-5 h-5 text-red-600" />}
                                         </button>
-                                    ))}
-                                </div>
+                                    );
+                                })}
                             </div>
-                        )}
 
-                        {view === 'results' && (
-                            <div className="text-center py-10 space-y-8 animate-in px-4">
-                                <div className="w-24 h-24 bg-blue-600 text-white rounded-full flex items-center justify-center mx-auto shadow-2xl shadow-blue-200">
-                                    <Icon name="party-popper" className="w-12 h-12" />
-                                </div>
-                                <div>
-                                    <h2 className="text-4xl font-black italic tracking-tighter uppercase">Mission Done</h2>
-                                    <p className="text-slate-400 font-bold mt-2 uppercase text-[10px] tracking-widest">Performance Summary</p>
-                                </div>
-                                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 grid grid-cols-2 gap-4 relative overflow-hidden">
-                                    <div className="text-center">
-                                        <p className="text-4xl font-black text-blue-600">{sessionScore}</p>
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Correct</p>
-                                    </div>
-                                    <div className="text-center border-l border-slate-100">
-                                        <p className="text-4xl font-black text-slate-800">{questions.length}</p>
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total</p>
+                            {isSubmitted && (
+                                <div className="mt-8 p-6 bg-slate-900 rounded-3xl text-white animate-in slide-in-from-top-4 duration-300">
+                                    <p className="text-blue-400 font-black uppercase text-[10px] tracking-widest mb-2 flex items-center gap-2">
+                                        <Icon name="info" className="w-3 h-3" />
+                                        Explanation
+                                    </p>
+                                    <p className="text-sm leading-relaxed text-slate-300 font-medium">
+                                        {currentQ.explanation}
+                                    </p>
+                                    <div className="mt-4 pt-4 border-t border-slate-800 italic text-slate-400 text-xs">
+                                        <span className="font-bold text-blue-400 uppercase tracking-tighter mr-2">Hint:</span>
+                                        {currentQ.hints}
                                     </div>
                                 </div>
-                                <button onClick={() => setView('lobby')} className="w-full bg-slate-900 text-white py-5 rounded-3xl font-black shadow-xl shadow-slate-200 active:scale-95 transition-all flex items-center justify-center gap-2">
-                                    <Icon name="home" className="w-5 h-5" />
-                                    RETURN LOBBY
-                                </button>
-                            </div>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="bg-white rounded-[2.5rem] p-8 text-center border border-slate-100 shadow-xl">
+                            <p className="text-slate-500 font-bold">Waiting for questions to sync...</p>
+                        </div>
+                    )}
+
+                    <div className="flex gap-4">
+                        {!isSubmitted ? (
+                            <button 
+                                onClick={handleSubmit}
+                                disabled={selectedIndices.length === 0}
+                                className={`w-full py-5 rounded-2xl font-black uppercase tracking-widest transition-all ${selectedIndices.length === 0 ? 'bg-slate-200 text-slate-400' : 'bg-blue-600 text-white shadow-xl shadow-blue-200 active:scale-95'}`}
+                            >
+                                Confirm Selection
+                            </button>
+                        ) : (
+                            <button 
+                                onClick={nextStep}
+                                className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl active:scale-95 flex items-center justify-center gap-3 transition-all"
+                            >
+                                {currentIndex === questions.length - 1 ? 'Finish Results' : 'Next Challenge'}
+                                <Icon name="arrow-right" className="w-5 h-5" />
+                            </button>
                         )}
-                    </main>
+                    </div>
                 </div>
             );
         }
