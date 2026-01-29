@@ -13,6 +13,7 @@
         .animate-in { animation: fadeIn 0.4s ease-out forwards; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .progress-bar { transition: width 1s cubic-bezier(0.4, 0, 0.2, 1); }
+        .option-active { transform: translateX(4px); border-color: #2563eb !important; background-color: #eff6ff !important; }
     </style>
 
     <!-- React Dependencies -->
@@ -81,7 +82,8 @@
             const [currentTopic, setCurrentTopic] = useState(null);
             const [questions, setQuestions] = useState([]);
             const [currentIndex, setCurrentIndex] = useState(0);
-            const [feedback, setFeedback] = useState(null);
+            const [feedback, setFeedback] = useState(null); // 'correct' | 'wrong'
+            const [selectedIndices, setSelectedIndices] = useState([]); // For MRQ
             const [sessionScore, setSessionScore] = useState(0);
             const [userStats, setUserStats] = useState({ total: 0, correct: 0 });
             const [topicStats, setTopicStats] = useState({});
@@ -96,12 +98,10 @@
                         return;
                     }
                     const { auth, methods } = window.FB;
-                    
                     try {
                         await methods.setPersistence(auth, methods.browserLocalPersistence);
                         await methods.getRedirectResult(auth);
                     } catch(e) { console.error("Auth error", e); }
-                    
                     methods.onAuthStateChanged(auth, (u) => {
                         setUser(u);
                         setAuthChecking(false);
@@ -116,7 +116,6 @@
                 if (!user || !window.FB) return;
                 const { db, methods } = window.FB;
 
-                // Load Questions and Extract Tags
                 const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
                 const unsubTopics = methods.onSnapshot(qRef, (snap) => {
                     const tags = new Set();
@@ -129,7 +128,6 @@
                     setTopics(Array.from(tags).sort());
                 });
 
-                // Load Global Stats (Private to User)
                 const statsRef = methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts');
                 const unsubStats = methods.onSnapshot(statsRef, (snap) => {
                     let correct = 0;
@@ -137,7 +135,6 @@
                     snap.forEach(d => { 
                         const data = d.data();
                         if (data.isCorrect) correct++;
-                        
                         const t = data.topic || "General";
                         if (!stats[t]) stats[t] = { correct: 0, total: 0, lastTry: 0 };
                         stats[t].total++;
@@ -152,18 +149,15 @@
                 return () => { unsubTopics(); unsubStats(); };
             }, [user]);
 
-            // Performance Calculation
             const performanceSets = useMemo(() => {
                 const results = topics.map(t => {
                     const s = topicStats[t] || { correct: 0, total: 0, lastTry: 0 };
                     const rate = s.total > 0 ? (s.correct / s.total) : -1;
                     return { name: t, rate, ...s };
                 });
-
                 const tried = results.filter(r => r.total > 0);
                 const best = [...tried].sort((a, b) => b.rate - a.rate || b.total - a.total).slice(0, 3);
                 const worst = [...tried].sort((a, b) => a.rate - b.rate || b.total - a.total).slice(0, 3);
-                
                 return { best, worst };
             }, [topics, topicStats]);
 
@@ -173,7 +167,7 @@
                 await methods.signInWithRedirect(auth, provider);
             };
 
-            const startQuiz = async (topic, limit = 1) => {
+            const startQuiz = async (topic, limit = 5) => {
                 const { db, methods } = window.FB;
                 const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
                 const snapshot = await methods.getDocs(qRef);
@@ -187,9 +181,15 @@
                 if (filtered.length === 0) return;
                 setQuestions(filtered.sort(() => Math.random() - 0.5).slice(0, limit));
                 setCurrentTopic(topic);
+                resetQuizState();
+                setView('quiz');
+            };
+
+            const resetQuizState = () => {
                 setCurrentIndex(0);
                 setSessionScore(0);
-                setView('quiz');
+                setFeedback(null);
+                setSelectedIndices([]);
             };
 
             const startChallenge = async () => {
@@ -201,31 +201,19 @@
                 const getQsForTopic = (list, topicNames) => {
                     return list.filter(q => {
                         const t = q.topic_tags || q.topic || q.tags || "General";
-                        return Array.isArray(t) 
-                            ? t.some(tag => topicNames.includes(tag)) 
-                            : topicNames.includes(t);
+                        return Array.isArray(t) ? t.some(tag => topicNames.includes(tag)) : topicNames.includes(t);
                     });
                 };
 
-                // 1. 2 from worst topics
                 const worstTopicNames = performanceSets.worst.map(t => t.name);
                 const worstSelection = getQsForTopic(allQs, worstTopicNames).sort(() => Math.random() - 0.5).slice(0, 2);
-
-                // 2. 1 from topic not tried longest time ago
-                const sortedByTime = topics.map(t => ({
-                    name: t,
-                    lastTry: topicStats[t]?.lastTry || 0
-                })).sort((a, b) => a.lastTry - b.lastTry);
+                const sortedByTime = topics.map(t => ({ name: t, lastTry: topicStats[t]?.lastTry || 0 })).sort((a, b) => a.lastTry - b.lastTry);
                 const oldestTopic = sortedByTime[0]?.name;
                 const oldestSelection = oldestTopic ? getQsForTopic(allQs, [oldestTopic]).sort(() => Math.random() - 0.5).slice(0, 1) : [];
-
-                // 3. 2 from other topics
                 const usedIds = new Set([...worstSelection, ...oldestSelection].map(q => q.id));
                 const otherSelection = allQs.filter(q => !usedIds.has(q.id)).sort(() => Math.random() - 0.5).slice(0, 2);
 
                 const finalSet = [...worstSelection, ...oldestSelection, ...otherSelection];
-                
-                // Final safety check to reach 5
                 if (finalSet.length < 5) {
                     const remainingNeeded = 5 - finalSet.length;
                     const usedIdsFinal = new Set(finalSet.map(q => q.id));
@@ -235,25 +223,50 @@
 
                 setQuestions(finalSet.sort(() => Math.random() - 0.5));
                 setCurrentTopic("Challenge Mode");
-                setCurrentIndex(0);
-                setSessionScore(0);
+                resetQuizState();
                 setView('quiz');
             };
 
-            const handleAnswer = async (idx) => {
+            // Enhanced check for Multi-answer logic
+            const validateAnswer = (q, selections) => {
+                const correct = q.correct_answer;
+                if (Array.isArray(correct)) {
+                    // MRQ: Must match exactly (order doesn't matter, but set content does)
+                    if (selections.length !== correct.length) return false;
+                    return correct.every(val => selections.includes(val)) && selections.every(val => correct.includes(val));
+                }
+                // MCQ: Must match single index
+                return selections.length === 1 && selections[0] === correct;
+            };
+
+            const handleOptionClick = (idx) => {
                 if (feedback) return;
                 const q = questions[currentIndex];
-                const correct = idx === q.correct_answer;
+                const isMulti = Array.isArray(q.correct_answer);
+
+                if (!isMulti) {
+                    // Single choice logic: Submit immediately
+                    processSubmission([idx]);
+                } else {
+                    // Multi choice logic: Toggle selection
+                    setSelectedIndices(prev => 
+                        prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]
+                    );
+                }
+            };
+
+            const processSubmission = async (selections) => {
+                if (feedback) return;
+                const q = questions[currentIndex];
+                const correct = validateAnswer(q, selections);
                 const { db, methods } = window.FB;
 
                 setFeedback(correct ? 'correct' : 'wrong');
                 if (correct) setSessionScore(s => s + 1);
 
-                // Extract a single topic string for stats tracking
                 const qTopic = Array.isArray(q.topic_tags) ? q.topic_tags[0] : (q.topic || q.tags || "General");
 
                 try {
-                    // Record private attempt
                     await methods.addDoc(methods.collection(db, 'artifacts', appId, 'users', user.uid, 'attempts'), {
                         question_id: q.id,
                         isCorrect: correct,
@@ -261,7 +274,6 @@
                         timestamp: methods.serverTimestamp()
                     });
 
-                    // Record for teacher activity feed
                     await methods.addDoc(methods.collection(db, 'artifacts', appId, 'public', 'data', 'activity_feed'), {
                         uid: user.uid,
                         displayName: user?.displayName || "Guest",
@@ -269,17 +281,15 @@
                         isCorrect: correct,
                         timestamp: methods.serverTimestamp()
                     });
-                } catch (err) {
-                    console.error("Failed to save attempt:", err);
-                }
+                } catch (err) { console.error(err); }
 
                 setTimeout(() => {
                     if (currentIndex + 1 < questions.length) {
                         setCurrentIndex(c => c + 1);
                         setFeedback(null);
+                        setSelectedIndices([]);
                     } else {
                         setView('results');
-                        setFeedback(null);
                     }
                 }, 1200);
             };
@@ -299,18 +309,15 @@
                             </div>
                             <h1 className="font-black text-xl italic tracking-tighter">ICT MASTER</h1>
                         </div>
-                        <div className="flex items-center gap-3">
-                            <div className="bg-blue-50 text-blue-700 px-3 py-1.5 rounded-2xl text-sm font-black flex items-center gap-2 border border-blue-100">
-                                <Icon name="award" className="w-4 h-4" />
-                                {userStats.correct}
-                            </div>
+                        <div className="bg-blue-50 text-blue-700 px-3 py-1.5 rounded-2xl text-sm font-black flex items-center gap-2 border border-blue-100">
+                            <Icon name="award" className="w-4 h-4" />
+                            {userStats.correct}
                         </div>
                     </header>
 
                     <main className="p-4 flex-1 overflow-y-auto">
                         {view === 'lobby' && (
                             <div className="space-y-6 animate-in">
-                                {/* Profile Summary */}
                                 <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm relative overflow-hidden">
                                     <div className="flex items-center gap-4 mb-6">
                                         <div className="bg-slate-100 w-12 h-12 rounded-2xl flex items-center justify-center">
@@ -324,90 +331,40 @@
                                             <button onClick={handleGoogleSignIn} className="ml-auto text-[10px] bg-blue-600 text-white font-black px-3 py-1 rounded-full uppercase">Sync</button>
                                         )}
                                     </div>
-
                                     <div className="space-y-4">
                                         <div className="flex justify-between items-end">
                                             <p className="text-4xl font-black">{userStats.total}</p>
-                                            <p className="text-sm font-bold text-blue-600">
-                                                {userStats.total > 0 ? Math.round((userStats.correct / userStats.total) * 100) : 0}% Accuracy
-                                            </p>
+                                            <p className="text-sm font-bold text-blue-600">{userStats.total > 0 ? Math.round((userStats.correct / userStats.total) * 100) : 0}% Accuracy</p>
                                         </div>
                                         <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
-                                            <div 
-                                                className="bg-blue-600 h-full progress-bar shadow-sm" 
-                                                style={{ width: `${userStats.total > 0 ? (userStats.correct / userStats.total) * 100 : 0}%` }}
-                                            />
+                                            <div className="bg-blue-600 h-full progress-bar shadow-sm" style={{ width: `${userStats.total > 0 ? (userStats.correct / userStats.total) * 100 : 0}%` }} />
                                         </div>
                                     </div>
                                     <Icon name="activity" className="absolute -right-4 -bottom-4 w-24 h-24 text-blue-50 opacity-20" />
                                 </div>
 
-                                {/* Performance Widgets */}
-                                {performanceSets.best.length > 0 && (
-                                    <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm space-y-4">
-                                        <div>
-                                            <h4 className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-2 flex items-center gap-1">
-                                                <Icon name="trending-up" className="w-3 h-3"/> Top Performance
-                                            </h4>
-                                            <div className="flex flex-wrap gap-2">
-                                                {performanceSets.best.map(t => (
-                                                    <span key={t.name} className="px-2 py-1 bg-green-50 text-green-700 text-[10px] font-bold rounded-lg border border-green-100">
-                                                        {t.name}
-                                                    </span>
-                                                ))}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <h4 className="text-[10px] font-black text-red-600 uppercase tracking-widest mb-2 flex items-center gap-1">
-                                                <Icon name="trending-down" className="w-3 h-3"/> Critical Review
-                                            </h4>
-                                            <div className="flex flex-wrap gap-2">
-                                                {performanceSets.worst.map(t => (
-                                                    <span key={t.name} className="px-2 py-1 bg-red-50 text-red-700 text-[10px] font-bold rounded-lg border border-red-100">
-                                                        {t.name}
-                                                    </span>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Challenge Button */}
                                 <div className="space-y-6">
-                                    <button 
-                                        onClick={startChallenge}
-                                        className="w-full bg-slate-900 text-white p-5 rounded-[2rem] font-black flex items-center justify-between group overflow-hidden relative shadow-xl active:scale-95 transition-all"
-                                    >
+                                    <button onClick={startChallenge} className="w-full bg-slate-900 text-white p-5 rounded-[2rem] font-black flex items-center justify-between group overflow-hidden relative shadow-xl active:scale-95 transition-all">
                                         <div className="relative z-10 flex items-center gap-3">
-                                            <div className="bg-white/10 p-2 rounded-xl">
-                                                <Icon name="zap" className="w-5 h-5 text-yellow-400" />
-                                            </div>
+                                            <div className="bg-white/10 p-2 rounded-xl"><Icon name="zap" className="w-5 h-5 text-yellow-400" /></div>
                                             <div className="text-left">
                                                 <p className="text-sm">DAILY CHALLENGE</p>
-                                                <p className="text-[10px] text-slate-400 font-bold uppercase">5 Targetted Questions</p>
+                                                <p className="text-[10px] text-slate-400 font-bold uppercase">5 Mixed Questions</p>
                                             </div>
                                         </div>
-                                        <Icon name="arrow-right" className="relative z-10 w-5 h-5 text-white group-hover:translate-x-1 transition-transform" />
+                                        <Icon name="arrow-right" className="relative z-10 w-5 h-5 text-white" />
                                         <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600 rounded-full blur-3xl opacity-20 -mr-10 -mt-10"></div>
                                     </button>
 
-                                    {/* Small Tags Practice List */}
                                     <div className="space-y-3">
                                         <h3 className="font-black text-slate-800 text-[11px] uppercase tracking-[0.2em] flex items-center gap-2 px-1">
-                                            <Icon name="hash" className="w-3 h-3 text-blue-500" />
-                                            Topic Practice
+                                            <Icon name="hash" className="w-3 h-3 text-blue-500" /> Topic Practice
                                         </h3>
                                         <div className="flex flex-wrap gap-2">
                                             {topics.map(t => (
-                                                <button 
-                                                    key={t} 
-                                                    onClick={() => startQuiz(t, 1)}
-                                                    className="px-3 py-2 bg-white text-slate-600 text-[11px] font-bold rounded-xl border border-slate-200 shadow-sm hover:border-blue-500 hover:text-blue-600 transition-all flex items-center gap-2 active:scale-95"
-                                                >
+                                                <button key={t} onClick={() => startQuiz(t)} className="px-3 py-2 bg-white text-slate-600 text-[11px] font-bold rounded-xl border border-slate-200 shadow-sm hover:border-blue-500 hover:text-blue-600 transition-all flex items-center gap-2 active:scale-95">
                                                     {t}
-                                                    {topicStats[t]?.total > 0 && (
-                                                        <span className="text-[9px] text-slate-300 font-black">{topicStats[t].correct}/{topicStats[t].total}</span>
-                                                    )}
+                                                    {topicStats[t]?.total > 0 && <span className="text-[9px] text-slate-300 font-black">{topicStats[t].correct}/{topicStats[t].total}</span>}
                                                 </button>
                                             ))}
                                         </div>
@@ -423,10 +380,13 @@
                                         <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0"></div>
                                         <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">{currentTopic}</span>
                                     </div>
-                                    <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest bg-blue-50 px-2 py-0.5 rounded-md">Step {currentIndex + 1}/{questions.length}</span>
+                                    <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest bg-blue-50 px-2 py-0.5 rounded-md">Q {currentIndex + 1}/{questions.length}</span>
                                 </div>
                                 
-                                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm min-h-[220px] flex items-center justify-center text-center relative overflow-hidden">
+                                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm min-h-[180px] flex flex-col items-center justify-center text-center relative overflow-hidden">
+                                    {Array.isArray(questions[currentIndex].correct_answer) && (
+                                        <span className="text-[9px] font-black text-blue-400 uppercase tracking-widest mb-3 border border-blue-100 px-2 py-0.5 rounded-full">Multiple Answers</span>
+                                    )}
                                     <h2 className="text-xl font-black text-slate-800 leading-tight relative z-10">{questions[currentIndex].text}</h2>
                                     <div className="absolute top-0 left-0 w-full h-1 bg-slate-50">
                                         <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}></div>
@@ -434,25 +394,45 @@
                                 </div>
 
                                 <div className="grid gap-3">
-                                    {questions[currentIndex].options.map((opt, i) => (
-                                        <button 
-                                            key={i} 
-                                            disabled={!!feedback}
-                                            onClick={() => handleAnswer(i)}
-                                            className={`p-5 rounded-2xl border-2 text-left font-bold transition-all flex items-center gap-4 ${
-                                                feedback === null ? 'bg-white border-slate-100 hover:border-blue-500 hover:bg-blue-50' : 
-                                                (i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : 
-                                                (feedback === 'wrong' && i === questions[currentIndex].correct_answer ? 'bg-green-50 border-green-500 text-green-700' : 
-                                                (feedback === 'wrong' && i !== questions[currentIndex].correct_answer ? 'opacity-40 border-slate-100' : 'bg-white border-slate-100')))
-                                            }`}
-                                        >
-                                            <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black shrink-0 ${feedback && i === questions[currentIndex].correct_answer ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                                                {String.fromCharCode(65 + i)}
-                                            </span>
-                                            <span className="text-sm">{opt}</span>
-                                        </button>
-                                    ))}
+                                    {questions[currentIndex].options.map((opt, i) => {
+                                        const isSelected = selectedIndices.includes(i);
+                                        const isMulti = Array.isArray(questions[currentIndex].correct_answer);
+                                        const correctAnswers = isMulti ? questions[currentIndex].correct_answer : [questions[currentIndex].correct_answer];
+                                        
+                                        let btnClass = "bg-white border-slate-100";
+                                        if (feedback === null && isSelected) btnClass = "option-active";
+                                        if (feedback !== null) {
+                                            if (correctAnswers.includes(i)) btnClass = "bg-green-50 border-green-500 text-green-700";
+                                            else if (isSelected) btnClass = "bg-red-50 border-red-500 text-red-700 opacity-80";
+                                            else btnClass = "opacity-40 grayscale";
+                                        }
+
+                                        return (
+                                            <button 
+                                                key={i} 
+                                                disabled={!!feedback}
+                                                onClick={() => handleOptionClick(i)}
+                                                className={`p-5 rounded-2xl border-2 text-left font-bold transition-all flex items-center gap-4 ${btnClass}`}
+                                            >
+                                                <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black shrink-0 ${isSelected || (feedback && correctAnswers.includes(i)) ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                    {String.fromCharCode(65 + i)}
+                                                </span>
+                                                <span className="text-sm">{opt}</span>
+                                                {feedback && correctAnswers.includes(i) && <Icon name="check" className="ml-auto w-4 h-4 text-green-600" />}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
+
+                                {Array.isArray(questions[currentIndex].correct_answer) && !feedback && (
+                                    <button 
+                                        onClick={() => processSubmission(selectedIndices)}
+                                        disabled={selectedIndices.length === 0}
+                                        className="w-full bg-blue-600 text-white p-5 rounded-2xl font-black shadow-lg shadow-blue-100 disabled:opacity-50 disabled:bg-slate-300 transition-all active:scale-95"
+                                    >
+                                        SUBMIT ANSWER
+                                    </button>
+                                )}
                             </div>
                         )}
 
@@ -463,9 +443,9 @@
                                 </div>
                                 <div>
                                     <h2 className="text-4xl font-black italic tracking-tighter uppercase">Mission Done</h2>
-                                    <p className="text-slate-400 font-bold mt-2 uppercase text-[10px] tracking-widest">Performance Summary</p>
+                                    <p className="text-slate-400 font-bold mt-2 uppercase text-[10px] tracking-widest">Session Performance</p>
                                 </div>
-                                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 grid grid-cols-2 gap-4 relative overflow-hidden">
+                                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 grid grid-cols-2 gap-4">
                                     <div className="text-center">
                                         <p className="text-4xl font-black text-blue-600">{sessionScore}</p>
                                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Correct</p>
@@ -476,8 +456,7 @@
                                     </div>
                                 </div>
                                 <button onClick={() => setView('lobby')} className="w-full bg-slate-900 text-white py-5 rounded-3xl font-black shadow-xl shadow-slate-200 active:scale-95 transition-all flex items-center justify-center gap-2">
-                                    <Icon name="home" className="w-5 h-5" />
-                                    RETURN LOBBY
+                                    <Icon name="home" className="w-5 h-5" /> RETURN LOBBY
                                 </button>
                             </div>
                         )}
