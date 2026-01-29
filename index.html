@@ -35,21 +35,25 @@
         const db = getFirestore(app);
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
+        // Stable logic: Immediate sign-in attempt
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+            signInWithCustomToken(auth, __initial_auth_token).catch(() => signInAnonymously(auth));
+        } else {
+            signInAnonymously(auth);
+        }
+
         window.FB = { 
             auth, 
             db, 
             appId, 
             methods: { 
                 onAuthStateChanged, 
-                signInAnonymously, 
-                signInWithCustomToken,
                 collection, 
                 onSnapshot, 
                 addDoc, 
                 serverTimestamp 
             } 
         };
-        window.dispatchEvent(new Event('firebase-ready'));
     </script>
 
     <script type="text/babel">
@@ -75,7 +79,7 @@
         };
 
         function App() {
-            const [view, setView] = useState('landing'); // landing, quiz, results
+            const [view, setView] = useState('landing'); 
             const [user, setUser] = useState(null);
             const [questions, setQuestions] = useState([]);
             const [currentIndex, setCurrentIndex] = useState(0);
@@ -84,34 +88,19 @@
             const [score, setScore] = useState(0);
             const [loading, setLoading] = useState(true);
 
-            // Authentication Handler (Rule 3: Auth Before Queries)
+            // Auth Listener
             useEffect(() => {
-                const initAuth = async () => {
-                    if (!window.FB) {
-                        window.addEventListener('firebase-ready', initAuth);
-                        return;
-                    }
-                    const { auth, methods } = window.FB;
-                    
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await methods.signInWithCustomToken(auth, __initial_auth_token);
-                        } else {
-                            await methods.signInAnonymously(auth);
-                        }
-                    } catch (err) {
-                        console.error("Auth failed", err);
-                    }
-
-                    const unsubscribe = methods.onAuthStateChanged(auth, setUser);
-                    return () => unsubscribe();
-                };
-                initAuth();
+                if (!window.FB) return;
+                const { auth, methods } = window.FB;
+                const unsubscribe = methods.onAuthStateChanged(auth, (u) => {
+                    setUser(u);
+                });
+                return () => unsubscribe();
             }, []);
 
-            // Data Fetching Handler (Rule 3: Guard with user check)
+            // Firestore Data Listener
             useEffect(() => {
-                if (!user || !window.FB) return;
+                if (!window.FB || !user) return;
                 
                 const { db, appId, methods } = window.FB;
                 const qRef = methods.collection(db, 'artifacts', appId, 'public', 'data', 'questions');
@@ -121,7 +110,7 @@
                     setQuestions(data);
                     setLoading(false);
                 }, (err) => {
-                    console.error("Firestore snapshot error:", err);
+                    console.error("Firestore error:", err);
                     setLoading(false);
                 });
                 
